@@ -203,6 +203,34 @@ describe("ensureResponsesCallIds", () => {
     expect(input[2]?.call_id).toBe(input[1]?.call_id);
   });
 
+  it("fills empty function_call name from the preceding sibling name", () => {
+    const body = ensureResponsesCallIds({
+      model: "gpt-6-astra",
+      input: [
+        { type: "function_call", call_id: "call_1", name: "Read", arguments: "{}" },
+        {
+          type: "function_call",
+          call_id: "",
+          name: "",
+          arguments: '{"path":"/tmp/shot.png"}',
+        },
+        { type: "function_call", call_id: "call_3", name: "Read", arguments: "{}" },
+      ],
+    });
+    const input = body.input as Array<Record<string, unknown>>;
+    expect(input[1]?.name).toBe("Read");
+    expect(String(input[1]?.call_id).length).toBeGreaterThan(0);
+  });
+
+  it("falls back to tool when no sibling name exists", () => {
+    const body = ensureResponsesCallIds({
+      model: "gpt-6-astra",
+      input: [{ type: "function_call", call_id: "call_1", name: "", arguments: "{}" }],
+    });
+    const input = body.input as Array<Record<string, unknown>>;
+    expect(input[0]?.name).toBe("tool");
+  });
+
   it("leaves valid call_id untouched", () => {
     const original = {
       model: "gpt-5.6-codex",
@@ -213,6 +241,41 @@ describe("ensureResponsesCallIds", () => {
     };
     const body = ensureResponsesCallIds(original);
     expect(body).toBe(original);
+  });
+});
+
+describe("chatToResponses empty tool name", () => {
+  it("reuses the preceding tool name when a streamed sibling has an empty name", () => {
+    const body = chatToResponses(
+      {
+        messages: [
+          {
+            role: "assistant",
+            tool_calls: [
+              {
+                id: "call_a",
+                type: "function",
+                function: { name: "Read", arguments: "{}" },
+              },
+              {
+                id: "",
+                type: "function",
+                function: {
+                  name: "",
+                  arguments: '{"path":"/tmp/shot.png"}',
+                },
+              },
+            ],
+          },
+        ],
+      },
+      "gpt-6-astra",
+    );
+    const input = body.input as Array<Record<string, unknown>>;
+    const calls = input.filter((item) => item.type === "function_call");
+    expect(calls[0]).toMatchObject({ type: "function_call", name: "Read", call_id: "call_a" });
+    expect(calls[1]).toMatchObject({ type: "function_call", name: "Read" });
+    expect(String(calls[1]?.call_id).length).toBeGreaterThan(0);
   });
 });
 

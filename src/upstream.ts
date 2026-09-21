@@ -799,8 +799,8 @@ async function forward(
     };
 
     let upstreamBody: Record<string, unknown> = bodyFor(upstreamKind);
-    // OpenAI Responses rejects empty call_id (minLength 1). Sanitize before egress —
-    // Cursor / bridged history can leave "" on function_call(_output) items.
+    // OpenAI Responses rejects empty call_id / name (minLength 1). Sanitize before
+    // egress — Cursor / bridged history can leave "" on function_call(_output) items.
     if (upstreamKind === "responses") {
       upstreamBody = ensureResponsesCallIds(upstreamBody);
     }

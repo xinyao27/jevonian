@@ -29,9 +29,15 @@ function callIdOf(...values: unknown[]): string {
   return firstNonEmpty(...values) || syntheticCallId();
 }
 
+/** OpenAI Responses rejects empty `name` on function_call items (minLength 1). */
+function toolNameOf(...values: unknown[]): string {
+  return firstNonEmpty(...values) || "tool";
+}
+
 /**
- * Fill empty `call_id` on Responses `input` items before upstream.
+ * Fill empty `call_id` / `name` on Responses `input` items before upstream.
  * Pair orphan `function_call_output` items with preceding unpaired `function_call`s.
+ * Cursor / bridged history can leave "" on both fields after broken stream merges.
  */
 export function ensureResponsesCallIds(body: Record<string, unknown>): Record<string, unknown> {
   const input = Array.isArray(body.input) ? body.input : null;
@@ -39,14 +45,17 @@ export function ensureResponsesCallIds(body: Record<string, unknown>): Record<st
 
   const unpaired: string[] = [];
   let changed = false;
+  let lastName = "";
   const next = input.map((raw) => {
     const item = asRecord(raw);
     if (item.type === "function_call") {
       const callId = callIdOf(item.call_id);
+      const name = toolNameOf(item.name, lastName);
+      if (firstNonEmpty(item.name)) lastName = asString(item.name);
       unpaired.push(callId);
-      if (callId === item.call_id) return raw;
+      if (callId === item.call_id && name === item.name) return raw;
       changed = true;
-      return { ...item, call_id: callId };
+      return { ...item, call_id: callId, name };
     }
     if (item.type === "function_call_output") {
       const existing = firstNonEmpty(item.call_id);
@@ -360,15 +369,20 @@ export function chatToResponses(
           content: [{ type: "output_text", text }],
         });
       }
+      // Streaming merges sometimes leave a sibling with name+empty args and another
+      // with args+empty name in the same assistant turn — reuse the last real name.
+      let lastToolName = "";
       for (const rawCall of toolCalls) {
         const call = asRecord(rawCall);
         const fn = asRecord(call.function);
         const callId = callIdOf(call.id);
+        const name = toolNameOf(fn.name, lastToolName);
+        if (firstNonEmpty(fn.name)) lastToolName = asString(fn.name);
         unpairedCallIds.push(callId);
         input.push({
           type: "function_call",
           call_id: callId,
-          name: asString(fn.name),
+          name,
           arguments:
             typeof fn.arguments === "string" ? fn.arguments : JSON.stringify(fn.arguments ?? {}),
         });
