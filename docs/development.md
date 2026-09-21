@@ -42,15 +42,17 @@ pnpm typecheck:web # type check the dashboard
 
 ## Release process
 
-Releases publish to npm via a version tag.
+Releases are cut manually with the repo skill [`.agents/skills/release`](../.agents/skills/release/SKILL.md): bump `package.json`, write `CHANGELOG.md`, commit, tag `vX.Y.Z`, push, and create a GitHub Release. **npm is not published automatically.**
+
+Before tagging, the skill runs:
 
 ```bash
+pnpm exec vp check
+pnpm test
 pnpm build
-vp check
-vp test
 pnpm smoke
 ```
 
-Bump `package.json` version, commit it, and push a matching tag such as `v0.1.0`. `.github/workflows/publish-npm.yml` runs the full check/test/build gate, requires the tag and package version to match, and publishes with npm provenance. It expects an `NPM_TOKEN` repository secret.
+Publish to npm only when you explicitly ask for it after the GitHub release. Follow [publish-checklist.md](../.agents/skills/release/publish-checklist.md) (npm login/2FA, `npm pack --dry-run`, then `npm publish --access public`).
 
-Once a release is published, `jevonian serve` checks the registry in the background at most once every 24 hours (on open, then hourly while the process stays up); short CLI commands also surface a previously cached update notice. When a newer version is available, run `jevonian update` or use **Update and restart** on the dashboard. The update is installed through the original npm/pnpm channel, then Jevonian stops accepting new inference requests, lets active streams finish, and starts the new process on the same port. Source checkouts never self-update.
+Once a release is on the registry, `jevonian serve` checks npm in the background at most once every 24 hours (on open, then hourly while the process stays up); short CLI commands also surface a previously cached update notice. When a newer version is available, run `jevonian update` or use **Update and restart** on the dashboard. The update is installed through the original npm/pnpm channel, then Jevonian stops accepting new inference requests, lets active streams finish, and starts the new process on the same port. Source checkouts never self-update.
