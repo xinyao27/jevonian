@@ -87,12 +87,15 @@ Create `CHANGELOG.md` if missing. Prepend a section (Keep a Changelog style):
 ## [X.Y.Z] - YYYY-MM-DD
 
 ### Added
+
 - …
 
 ### Changed
+
 - …
 
 ### Fixed
+
 - …
 ```
 
