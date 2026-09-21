@@ -1,0 +1,87 @@
+{
+  "name": "jevonian",
+  "version": "0.0.1",
+  "private": false,
+  "description": "Local-first model router for coding agents: one endpoint, automatic model selection, cache-aware session stickiness.",
+  "homepage": "https://github.com/xinyao27/jevonian#readme",
+  "bugs": {
+    "url": "https://github.com/xinyao27/jevonian/issues"
+  },
+  "license": "AGPL-3.0-only",
+  "author": {
+    "name": "xinyao",
+    "email": "hi@xinyao.me"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xinyao27/jevonian.git"
+  },
+  "funding": "https://github.com/sponsors/xinyao27",
+  "bin": {
+    "jevonian": "dist/cli.mjs"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md",
+    "!dist/**/*.map"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "vp pack && vp -C web build",
+    "web:dev": "vp -C web dev",
+    "web:build": "vp -C web build",
+    "typecheck:web": "tsc -p web/tsconfig.json",
+    "start": "node dist/cli.mjs serve",
+    "check": "vp check --fix",
+    "lint": "vp lint --fix",
+    "fmt": "vp fmt",
+    "test": "vp test",
+    "smoke": "bash scripts/smoke.sh",
+    "up": "taze major -Ir",
+    "prepare": "vp config",
+    "prepublishOnly": "pnpm exec vp check && pnpm test && pnpm build"
+  },
+  "dependencies": {
+    "@ai-sdk/gateway": "^4.0.86",
+    "@hono/node-server": "^2.1.1",
+    "ai": "^7.0.106",
+    "hono": "^4.13.8",
+    "undici": "^8.10.2"
+  },
+  "devDependencies": {
+    "@base-ui-components/react": "1.0.0-rc.0",
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/modifiers": "^9.0.0",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^26.6.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "cn": "^0.3.0",
+    "lucide-react": "^1.47.0",
+    "radix-ui": "^1.6.7",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-router": "^8.4.0",
+    "tailwind-merge": "^3.7.0",
+    "tailwindcss": "^4.3.3",
+    "taze": "latest",
+    "tsx": "^4.23.13",
+    "typescript": "~5.9.3",
+    "vite": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@12.4.1"
+}
