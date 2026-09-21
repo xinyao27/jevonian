@@ -23,6 +23,7 @@ Status: **v0.** Transparent pass-through, phase-based automatic routing, a local
 - [Why Jevonian](#why-jevonian)
 - [How it works](#how-it-works)
 - [Quickstart](#quickstart)
+- [Connect your agent](#connect-your-agent)
 - [Clients and providers](#clients-and-providers)
 - [Control and visibility](#control-and-visibility)
 - [Privacy and limitations](#privacy-and-limitations)
@@ -97,6 +98,59 @@ jevonian report
 ```
 
 While no Jevonian key exists, the proxy stays open for first-run convenience. Once one exists, all `/v1/*` traffic must carry it as `authorization: Bearer …` or `x-api-key`.
+
+## Connect your agent
+
+Every client below ends up talking to the same endpoint with a Jevonian key (`sk-jev-…`) and the model `jevonian/auto`. The only difference is how each one is pointed at it.
+
+### Cursor
+
+Cursor runs in the cloud and only accepts a **public HTTPS** URL for a custom OpenAI endpoint, so `http://127.0.0.1:8787/v1` will not work — you need a tunnel. Jevonian's tunnel is an explicit opt-in that publishes nothing but `/v1`:
+
+1. Generate a key on the **Keys** page first. A tunnel cannot start while no Jevonian key exists.
+2. On the **Overview** page, open **Public tunnel**, pick a provider, and press **Start tunnel** (or run `jevonian serve --tunnel` to force it on for one run).
+   - `cloudflare` — quick tunnel, no account needed; gives a random `*.trycloudflare.com` URL.
+   - `ngrok` — run `ngrok config add-authtoken` once, then paste a reserved domain to keep a stable address (recommended for Cursor).
+3. Copy the public URL and append `/v1` — that is the Base URL Cursor needs. The tunnel's URL survives server restarts (including `pnpm dev` HMR) until you press **Stop tunnel**, so you do not have to re-paste it every session.
+4. In Cursor, open **Settings → Models → API Keys** and fill it in:
+
+| Field                        | Value                                     |
+| ---------------------------- | ----------------------------------------- |
+| **API Key**                  | the Jevonian key from step 1 (`sk-jev-…`) |
+| **Use OpenAI API Key**       | on                                        |
+| **Override OpenAI Base URL** | on                                        |
+| **Base URL**                 | `https://<your-tunnel-host>/v1`           |
+
+5. Add the model `jevonian/auto` to your model list and enable it (leave the other models toggled off if you want Jevonian to serve everything).
+
+![Cursor model settings pointed at a tunneled Jevonian endpoint](docs/assets/cursor-models.png)
+
+That is the whole setup: Cursor sends OpenAI Chat Completions to the tunnel, Jevonian picks the route per turn, and each request shows up in **Logs** with the phase, the model that actually served it, and the reason. If a turn fails, check the tunnel status and the **Logs** page before touching Cursor's settings again.
+
+### Claude Code and Claude Desktop
+
+Both surfaces are covered by one **Connect Claude** action on the **Clients** page: it rewrites Claude Desktop's third-party gateway profile and Claude Code's `~/.claude/settings.json`, and **Restore** puts them back. For a one-shot session that changes nothing on disk:
+
+```bash
+jevonian launch claude
+jevonian launch claude --model jevonian/auto -- -p "summarize this repo"
+```
+
+### ChatGPT / Codex
+
+**Connect ChatGPT** on the **Clients** page writes `~/.codex/config.toml` (`openai_base_url` plus an injected model catalog) and points the Codex desktop app at the loopback endpoint. An existing `auth.json` login is never overwritten.
+
+### Anything else
+
+Any client speaking OpenAI Chat Completions, Anthropic Messages, or OpenAI Responses can be configured by hand:
+
+```bash
+export OPENAI_BASE_URL=http://127.0.0.1:8787/v1
+export OPENAI_API_KEY=sk-jev-…
+# then select the model jevonian/auto
+```
+
+See [tunnel.md](docs/tunnel.md) for the tunnel's providers and security notes, and [cli.md](docs/cli.md) for the launch commands.
 
 ## Clients and providers
 
