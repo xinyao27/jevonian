@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.1.1] - 2026-09-22
+
+### Added
+
+- Dashboard loading skeletons on every data-backed page, built from the shared shadcn `Skeleton` primitive.
+
+### Fixed
+
+- DeepSeek and Moonshot/Kimi thinking-mode tool loops no longer fail with `reasoning_content must be passed back to the API`. Jevonian caches upstream reasoning and reinjects it when clients (notably Cursor) drop the field after tool calls.
+
 ## [0.1.0] - 2026-09-22
 
 ### Added
