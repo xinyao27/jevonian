@@ -7,7 +7,6 @@ import {
   ScrollTextIcon,
   ServerIcon,
 } from "lucide-react";
-import { useEffect, useState } from "react";
 import { NavLink, Outlet } from "react-router";
 
 import { ErrorBoundary } from "@/components/error-boundary";
@@ -27,7 +26,6 @@ import {
   SidebarRail,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
-import { api } from "@/lib/api";
 
 const GITHUB_REPO = "https://github.com/xinyao27/jevonian";
 
@@ -50,23 +48,6 @@ const links = [
 ];
 
 export function Layout() {
-  const [version, setVersion] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    void api
-      .update()
-      .then((response) => {
-        if (!cancelled) setVersion(response.update.current);
-      })
-      .catch(() => {
-        // Version is decorative; leave the footer empty if the check fails.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   return (
     <SidebarProvider>
       <Sidebar collapsible="icon">
@@ -81,7 +62,7 @@ export function Layout() {
             <span className="grid min-w-0 flex-1 text-left leading-tight group-data-[collapsible=icon]:hidden">
               <span className="truncate text-sm font-semibold tracking-tight">Jevonian</span>
               <span className="truncate text-[11px] text-muted-foreground">
-                {version ? `v${version}` : "Model router"}
+                v{__JEVONIAN_VERSION__}
               </span>
             </span>
           </NavLink>

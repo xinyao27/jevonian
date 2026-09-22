@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -6,12 +7,18 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite-plus";
 
 const root = dirname(fileURLToPath(import.meta.url));
+const { version } = JSON.parse(readFileSync(resolve(root, "../package.json"), "utf8")) as {
+  version: string;
+};
 
 export default defineConfig({
   root,
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: { "@": resolve(root, "src") },
+  },
+  define: {
+    __JEVONIAN_VERSION__: JSON.stringify(version),
   },
   build: {
     outDir: resolve(root, "../dist/web"),
