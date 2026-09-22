@@ -103,9 +103,11 @@ function percent(value: unknown): number | undefined {
 }
 
 /**
- * OpenCode Go reports `percent` already scaled to 0-100, so a raw value of `1` means
- * "1% used", not 100%. Running it through {@link percent} reads an almost-idle weekly
- * window as fully spent and marks the provider exhausted, which drops it from routing.
+ * Already-scaled 0-100 usage (OpenCode Go `percent`, Codex `used_percent`).
+ *
+ * A raw value of `1` means "1% used", not 100%. Running it through {@link percent}
+ * treats `<= 1` as a 0-1 fraction, so an almost-idle Codex weekly window becomes
+ * fully spent and drops the provider from routing.
  */
 function percentPoints(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
@@ -275,7 +277,8 @@ function windowMinutesLabel(minutes: number | undefined): string {
 
 function codexWindow(id: string, raw: unknown): QuotaWindow | undefined {
   const window = asRecord(raw);
-  const usedPercent = percent(window.used_percent);
+  // Codex reports used_percent on a 0-100 scale (1 = 1%), same as OpenCode Go.
+  const usedPercent = percentPoints(window.used_percent);
   if (usedPercent === undefined) return undefined;
   const seconds =
     typeof window.limit_window_seconds === "number"
@@ -303,7 +306,7 @@ export function codexWindowsFromHeaders(headers: Headers): QuotaWindow[] {
     return Number.isFinite(parsed) ? parsed : undefined;
   };
   const window = (id: string, prefix: string): QuotaWindow | undefined => {
-    const usedPercent = percent(parse(`${prefix}-used-percent`));
+    const usedPercent = percentPoints(parse(`${prefix}-used-percent`));
     if (usedPercent === undefined) return undefined;
     const minutes = parse(`${prefix}-window-minutes`);
     const resetsAt = toIso(parse(`${prefix}-reset-at`));
@@ -968,8 +971,23 @@ async function buildQuota(
   const live = await fetchLive(provider);
   const liveError = live && "error" in live ? live.error : undefined;
   if (live && !("error" in live) && (live.windows.length > 0 || live.balance)) {
-    // The probe answered, so any "this provider refused" snapshot on disk is stale.
-    clearRejection(provider.name);
+    // The probe answered. Drop a synthetic rejection, and when live returns real
+    // windows overwrite the on-disk snapshot too — otherwise a cold live cache
+    // falls back to a stale 100% (mis-scaled Codex `used_percent: 1`, or an old
+    // rejection) and routing skips a healthy provider.
+    if (live.windows.length > 0) {
+      const current = headerQuotas();
+      saveHeaderQuotas({
+        ...current,
+        [provider.name]: {
+          windows: live.windows,
+          fetchedAt: new Date().toISOString(),
+          ...(live.plan ? { plan: live.plan } : {}),
+        },
+      });
+    } else {
+      clearRejection(provider.name);
+    }
     return {
       ...base,
       source: "live",

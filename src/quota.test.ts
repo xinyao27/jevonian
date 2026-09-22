@@ -124,6 +124,22 @@ describe("quota headers", () => {
     expect(windows[1]).toMatchObject({ id: "codex-secondary", label: "7d", usedPercent: 6 });
   });
 
+  it("treats Codex used_percent of 1 as 1%, not 100%", () => {
+    // Codex (and the wham/usage live endpoint) already scale to 0-100. The
+    // fraction-aware percent() helper would multiply 1 → 100 and mark an idle
+    // weekly window exhausted.
+    const headers = new Headers({
+      "x-codex-primary-used-percent": "1",
+      "x-codex-primary-window-minutes": "10080",
+      "x-codex-primary-reset-at": "1700000000",
+    });
+    expect(codexWindowsFromHeaders(headers)[0]).toMatchObject({
+      id: "codex-primary",
+      label: "7d",
+      usedPercent: 1,
+    });
+  });
+
   it("ignores responses without rate limit headers", () => {
     expect(anthropicWindowsFromHeaders(new Headers())).toEqual([]);
     expect(codexWindowsFromHeaders(new Headers())).toEqual([]);
@@ -567,6 +583,127 @@ describe("quota headers", () => {
       );
     },
   );
+
+  it("reads Codex live usage without treating used_percent 1 as exhausted", async () => {
+    const authPath = join(dir, "codex-auth.json");
+    writeFileSync(
+      authPath,
+      JSON.stringify({
+        tokens: { access_token: "codex-test-token", account_id: "acct_1" },
+      }),
+    );
+    vi.stubEnv("JEVONIAN_CODEX_AUTH", authPath);
+    const config = parseConfig({
+      providers: [
+        {
+          name: "chatgpt-subscription",
+          type: "responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          auth: "oauth",
+          oauthSource: "codex",
+          billing: "subscription",
+          models: ["gpt-6-astra"],
+        },
+      ],
+    });
+    let requestedUrl = "";
+    vi.stubGlobal("fetch", async (url: string) => {
+      requestedUrl = url;
+      return new Response(
+        JSON.stringify({
+          plan_type: "prolite",
+          rate_limit: {
+            allowed: true,
+            limit_reached: false,
+            primary_window: {
+              used_percent: 1,
+              limit_window_seconds: 604_800,
+              reset_at: 1_790_690_004,
+            },
+            secondary_window: null,
+          },
+          credits: { balance: "0", unlimited: false },
+        }),
+      );
+    });
+
+    const quotas = await providerQuotas(config, { refresh: true });
+    expect(requestedUrl).toBe("https://chatgpt.com/backend-api/wham/usage");
+    expect(quotas[0]?.source).toBe("live");
+    expect(quotas[0]?.plan).toBe("prolite");
+    expect(quotas[0]?.note).toBe("credits 0");
+    expect(quotas[0]?.windows).toEqual([
+      {
+        id: "codex-primary",
+        label: "7d",
+        usedPercent: 1,
+        resetsAt: new Date(1_790_690_004 * 1000).toISOString(),
+      },
+    ]);
+    expect(providerQuotaHealth(config.providers[0]!).status).toBe("ok");
+  });
+
+  it("overwrites a stale Codex snapshot when live usage answers", async () => {
+    const authPath = join(dir, "codex-auth.json");
+    writeFileSync(
+      authPath,
+      JSON.stringify({
+        tokens: { access_token: "codex-test-token", account_id: "acct_1" },
+      }),
+    );
+    vi.stubEnv("JEVONIAN_CODEX_AUTH", authPath);
+    writeFileSync(
+      quotaStatePath(),
+      JSON.stringify({
+        "chatgpt-subscription": {
+          windows: [
+            {
+              id: "codex-primary",
+              label: "7d",
+              usedPercent: 100,
+              resetsAt: "2026-09-29T13:53:24.000Z",
+            },
+          ],
+          fetchedAt: new Date(Date.now() - 3_600_000).toISOString(),
+        },
+      }),
+    );
+    resetQuotaCache();
+    const config = parseConfig({
+      providers: [
+        {
+          name: "chatgpt-subscription",
+          type: "responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          auth: "oauth",
+          oauthSource: "codex",
+          billing: "subscription",
+          models: ["gpt-6-astra"],
+        },
+      ],
+    });
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(
+          JSON.stringify({
+            plan_type: "prolite",
+            rate_limit: {
+              primary_window: {
+                used_percent: 1,
+                limit_window_seconds: 604_800,
+                reset_at: 1_790_690_004,
+              },
+            },
+            credits: { balance: "0" },
+          }),
+        ),
+    );
+
+    await providerQuotas(config, { refresh: true });
+    expect(headerQuotas()["chatgpt-subscription"]?.windows[0]?.usedPercent).toBe(1);
+    expect(providerQuotaHealth(config.providers[0]!).status).toBe("ok");
+  });
 
   it("reads DeepSeek, OpenRouter, and Moonshot balances", async () => {
     const config = parseConfig({
