@@ -43,6 +43,14 @@ import { providerQuotaHealth, providerQuotas } from "./quota";
 import { deriveRoutings, deriveTiers, claudeCodeModels } from "./routing";
 import { SessionStore } from "./routing";
 import { createApp, createPublicApp } from "./server";
+import {
+  ensureService,
+  isManagedByLaunchd,
+  readServeLogTail,
+  serviceStatus,
+  stopService,
+  uninstallService,
+} from "./service";
 import { TunnelManager } from "./tunnel";
 import { formatUpdateNotice, UPDATE_INTERVAL_MS, UpdateManager } from "./updates";
 
@@ -825,6 +833,47 @@ async function updateCommand(): Promise<void> {
   console.log(`updated to ${status.latest}. Restart Jevonian to use the new version.`);
 }
 
+function printServiceStatus(): void {
+  const status = serviceStatus();
+  console.log(`label:   ${status.label}`);
+  console.log(`plist:   ${status.plistPath}${status.plistInstalled ? "" : " (missing)"}`);
+  console.log(`loaded:  ${status.loaded ? "yes" : "no"}`);
+  if (status.pid) console.log(`pid:     ${status.pid}`);
+  console.log(`log:     ${status.logPath}`);
+  if (status.detail && status.detail !== "loaded") console.log(`detail:  ${status.detail}`);
+  const tail = readServeLogTail(12);
+  if (tail) {
+    console.log("");
+    console.log("recent log:");
+    console.log(tail);
+  }
+}
+
+async function stopCommand(): Promise<void> {
+  if (process.platform !== "darwin") {
+    console.error("Background service control is only available on macOS.");
+    process.exitCode = 1;
+    return;
+  }
+  try {
+    if ("uninstall" in flags) {
+      uninstallService();
+      console.log("stopped and uninstalled the LaunchAgent");
+      return;
+    }
+    stopService();
+    console.log("stopped");
+    printServiceStatus();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
+async function statusCommand(): Promise<void> {
+  printServiceStatus();
+}
+
 async function main(): Promise<void> {
   // Before anything reaches out: a machine behind a proxy can only be reached from
   // here if that proxy is installed first.
@@ -852,9 +901,26 @@ async function main(): Promise<void> {
     await quota("refresh" in flags);
   } else if (command === "update") {
     await updateCommand();
+  } else if (command === "stop") {
+    await stopCommand();
+  } else if (command === "status") {
+    await statusCommand();
   } else if (command === "launch") {
     await launchCommand(process.argv.slice(3));
   } else if (command === "serve") {
+    // macOS default: install/start a LaunchAgent and exit. Foreground only when
+    // launchd is already driving us, or the user asked for it / one-shot flags.
+    const foreground =
+      isManagedByLaunchd() ||
+      "foreground" in flags ||
+      "fg" in flags ||
+      process.platform !== "darwin" ||
+      "tunnel" in flags ||
+      "no-tunnel" in flags;
+    if (!foreground) {
+      await ensurePersistentServe();
+      return;
+    }
     const loaded = loadConfig();
     const config = loaded ?? parseConfig({});
     if (!loaded) {
@@ -929,6 +995,11 @@ async function main(): Promise<void> {
       // The lifecycle has already waited for active responses. Closing the
       // listeners releases the port, then the newly installed CLI takes over.
       await Promise.all([closeServer(mainServer), closeServer(publicServer)]);
+      // Under launchd KeepAlive, exiting is enough — spawning a child would race
+      // the agent for the same ports.
+      if (isManagedByLaunchd()) {
+        process.exit(0);
+      }
       const entry = process.argv[1];
       if (!entry) {
         console.error("update installed, but Jevonian could not restart automatically.");
@@ -1023,9 +1094,33 @@ async function main(): Promise<void> {
     );
   } else {
     console.log(
-      "Usage: jevonian [serve|add|providers|remove|report|doctor|models|pricing|quota|update|launch|init]",
+      "Usage: jevonian [serve|stop|status|add|providers|remove|report|doctor|models|pricing|quota|update|launch|init]",
     );
     process.exit(1);
+  }
+}
+
+async function ensurePersistentServe(): Promise<void> {
+  notifyCachedUpdate();
+  try {
+    const { status, action } = ensureService();
+    const config = loadConfig() ?? parseConfig({});
+    const url = `http://${config.listen.host === "0.0.0.0" ? "127.0.0.1" : config.listen.host}:${config.listen.port}/`;
+    if (action === "installed") console.log("Jevonian is now running in the background.");
+    else if (action === "updated") console.log("Jevonian service updated and restarted.");
+    else if (action === "started") console.log("Jevonian service started.");
+    else console.log("Jevonian is already running in the background.");
+    console.log(`dashboard: ${url}`);
+    if (status.pid) console.log(`pid:       ${status.pid}`);
+    console.log(`log:       ${status.logPath}`);
+    console.log("stop:      jevonian stop");
+    console.log("status:    jevonian status");
+    console.log("foreground: jevonian --foreground");
+    openBrowser(url);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    console.error("Could not start the background service. Try `jevonian --foreground`.");
+    process.exitCode = 1;
   }
 }
 

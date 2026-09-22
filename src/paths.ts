@@ -39,3 +39,8 @@ export function ledgerPath(): string {
   if (process.env.JEVONIAN_LEDGER) return process.env.JEVONIAN_LEDGER;
   return join(dataDir(), "ledger.jsonl");
 }
+
+export function serveLogPath(): string {
+  if (process.env.JEVONIAN_SERVE_LOG) return process.env.JEVONIAN_SERVE_LOG;
+  return join(dataDir(), "serve.log");
+}

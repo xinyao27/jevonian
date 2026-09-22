@@ -2,7 +2,9 @@
 
 Every command works against the same `~/.config/jevonian/config.json` the dashboard edits.
 
-- `jevonian serve` — start the local proxy (default command)
+- `jevonian` / `jevonian serve` — start the local proxy (default). On macOS this installs a LaunchAgent, keeps it running in the background, and returns; on other platforms it serves in the foreground. Use `--foreground` for an attached process on macOS
+- `jevonian stop [--uninstall]` — stop the macOS background service (`--uninstall` also removes the LaunchAgent)
+- `jevonian status` — LaunchAgent state, pid, and recent serve log (macOS)
 - `jevonian init` — setup wizard for the first provider (non-interactive: writes an example config)
 - `jevonian add [provider]` — add or update a provider; interactive picker, live model discovery, auto tiers
 - `jevonian providers` — list configured providers with key source and model count
@@ -15,7 +17,7 @@ Every command works against the same `~/.config/jevonian/config.json` the dashbo
 - `jevonian update [--check]` — check for or install the latest release through the detected package manager
 - `jevonian launch claude [--model M] [--] [args…]` — run Claude Code through Jevonian (Ollama-style env remap)
 
-`serve` also accepts `--tunnel` and `--no-tunnel` to force the public endpoint on or off for that run; see [tunnel.md](tunnel.md).
+`serve` also accepts `--tunnel` and `--no-tunnel` to force the public endpoint on or off for that run (these imply foreground on macOS); see [tunnel.md](tunnel.md). Background serve logs to `~/.local/share/jevonian/serve.log`.
 
 ### Claude Code
 
@@ -35,7 +37,7 @@ In `/model` you should see **Jevonian Auto** (and Haiku labeled **Jevonian Utili
 Running from a source checkout, prefix these with `node dist/cli.mjs`:
 
 ```bash
-node dist/cli.mjs serve
+node dist/cli.mjs
 node dist/cli.mjs report
 ```
 

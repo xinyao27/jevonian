@@ -81,7 +81,19 @@ npm install --global jevonian
 jevonian
 ```
 
-Or with pnpm: `pnpm add --global jevonian`. That serves the proxy and dashboard together on `http://127.0.0.1:8787` and opens the browser. Then:
+Or with pnpm: `pnpm add --global jevonian`.
+
+On **macOS**, `jevonian` installs a LaunchAgent and keeps the proxy running in the background (survives terminal exit and reboots). On other platforms it serves in the foreground. Dashboard: `http://127.0.0.1:8787`.
+
+| Command | What it does |
+| --- | --- |
+| `jevonian` | Start / ensure the proxy is running |
+| `jevonian status` | Show pid and recent log (macOS) |
+| `jevonian stop` | Stop the background service (macOS) |
+| `jevonian stop --uninstall` | Stop and remove the LaunchAgent (macOS) |
+| `jevonian --foreground` | Run attached in this terminal instead |
+
+Then:
 
 1. **Add a provider** on the **Providers** page and paste its API key. Keys are stored in `~/.config/jevonian/credentials.json` with `0600` permissions.
 2. **Add a brain** on the same page. Automatic routing needs one; pick the channel you already pay for.
