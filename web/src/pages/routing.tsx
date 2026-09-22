@@ -1147,9 +1147,7 @@ export function RoutingPage() {
                           Drag models = fallback order
                         </span>
                       ) : expanded && routing.models.length > 0 ? (
-                        <span className="text-[10px] text-muted-foreground">
-                          × = stop using
-                        </span>
+                        <span className="text-[10px] text-muted-foreground">× = stop using</span>
                       ) : null}
                     </div>
 
@@ -1188,13 +1186,10 @@ export function RoutingPage() {
                               statuses: statusByProvider,
                               officials: officialsByModel.get(model),
                               catalogName: catalogNames.get(model),
-                              onRemove: expanded
-                                ? () => removeModel(routing.id, model)
-                                : undefined,
+                              onRemove: expanded ? () => removeModel(routing.id, model) : undefined,
                               editableProviders,
                               onChangeProviders: editableProviders
-                                ? (next: string[]) =>
-                                    setModelProviders(routing.id, model, next)
+                                ? (next: string[]) => setModelProviders(routing.id, model, next)
                                 : undefined,
                             };
                             if (draggable) {

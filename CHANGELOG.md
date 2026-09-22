@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.1.3] - 2026-09-22
+
+### Added
+
+- Routing page: drag models within a routing to set fallback order. The first model with a healthy provider is used; later models wait until earlier ones are unavailable.
+
 ## [0.1.2] - 2026-09-22
 
 ### Fixed
