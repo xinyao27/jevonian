@@ -2,11 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
-## [Unreleased]
+## [0.1.4] - 2026-09-22
+
+### Added
+
+- Soft routing evidence from models.dev benchmarks (SWE-Bench, Terminal-Bench, and related boards). Scores cache locally for 12 hours, refresh with `jevonian refresh`, and only attach when a model has data — missing benchmarks never bias selection.
 
 ### Fixed
 
 - Oversized Responses `call_id` values (longer than 64 characters) are clamped to a stable short id before upstream, so OpenAI no longer rejects the request with `string_above_max_length` while call/output pairs stay matched.
+- Codex quota no longer treats `used_percent: 1` (1%) as 100% exhausted.
+
+### Changed
+
+- Dashboard version is baked from `package.json` at build time.
 
 ## [0.1.3] - 2026-09-22
 

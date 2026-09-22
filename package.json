@@ -1,6 +1,6 @@
 {
   "name": "jevonian",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": false,
   "description": "Local-first model router for coding agents: one endpoint, automatic model selection, cache-aware session stickiness.",
   "homepage": "https://github.com/xinyao27/jevonian#readme",
