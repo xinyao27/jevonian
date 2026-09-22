@@ -1,4 +1,8 @@
+import { createHash } from "node:crypto";
 import type { Usage } from "./pricing";
+
+/** OpenAI Responses rejects `call_id` longer than this (`string_above_max_length`). */
+const MAX_CALL_ID_LENGTH = 64;
 
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
@@ -24,9 +28,21 @@ function syntheticCallId(): string {
   return `call_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
 }
 
+/**
+ * Map oversized ids to a stable short form so function_call / function_call_output
+ * pairs still match after clamp. Bridged clients (Cursor / Codex / non-OpenAI
+ * backends) can emit ids past the Responses 64-char max.
+ */
+function clampCallId(id: string): string {
+  if (id.length <= MAX_CALL_ID_LENGTH) return id;
+  const hash = createHash("sha256").update(id, "utf8").digest("hex").slice(0, 24);
+  return `call_${hash}`;
+}
+
 /** Prefer real ids; never return "" — OpenAI Responses rejects empty `call_id`. */
 function callIdOf(...values: unknown[]): string {
-  return firstNonEmpty(...values) || syntheticCallId();
+  const id = firstNonEmpty(...values);
+  return id ? clampCallId(id) : syntheticCallId();
 }
 
 /** OpenAI Responses rejects empty `name` on function_call items (minLength 1). */
@@ -35,9 +51,10 @@ function toolNameOf(...values: unknown[]): string {
 }
 
 /**
- * Fill empty `call_id` / `name` on Responses `input` items before upstream.
- * Pair orphan `function_call_output` items with preceding unpaired `function_call`s.
- * Cursor / bridged history can leave "" on both fields after broken stream merges.
+ * Fill empty / oversized `call_id` and empty `name` on Responses `input` items
+ * before upstream. Pair orphan `function_call_output` items with preceding
+ * unpaired `function_call`s. Cursor / bridged history can leave "" on both
+ * fields after broken stream merges, or grow `call_id` past 64 characters.
  */
 export function ensureResponsesCallIds(body: Record<string, unknown>): Record<string, unknown> {
   const input = Array.isArray(body.input) ? body.input : null;
@@ -59,12 +76,10 @@ export function ensureResponsesCallIds(body: Record<string, unknown>): Record<st
     }
     if (item.type === "function_call_output") {
       const existing = firstNonEmpty(item.call_id);
-      let callId = existing;
+      let callId = existing ? clampCallId(existing) : unpaired.shift() || syntheticCallId();
       if (existing) {
-        const index = unpaired.indexOf(existing);
+        const index = unpaired.indexOf(callId);
         if (index >= 0) unpaired.splice(index, 1);
-      } else {
-        callId = unpaired.shift() || syntheticCallId();
       }
       if (callId === item.call_id) return raw;
       changed = true;
@@ -345,12 +360,10 @@ export function chatToResponses(
     }
     if (role === "tool" || role === "function") {
       const existing = firstNonEmpty(message.tool_call_id);
-      let callId = existing;
+      let callId = existing ? clampCallId(existing) : unpairedCallIds.shift() || syntheticCallId();
       if (existing) {
-        const index = unpairedCallIds.indexOf(existing);
+        const index = unpairedCallIds.indexOf(callId);
         if (index >= 0) unpairedCallIds.splice(index, 1);
-      } else {
-        callId = unpairedCallIds.shift() || syntheticCallId();
       }
       input.push({
         type: "function_call_output",

@@ -242,6 +242,68 @@ describe("ensureResponsesCallIds", () => {
     const body = ensureResponsesCallIds(original);
     expect(body).toBe(original);
   });
+
+  it("clamps oversized call_id and keeps call/output pairs matched", () => {
+    const longId = `call_${"a".repeat(80)}`;
+    expect(longId.length).toBeGreaterThan(64);
+    const body = ensureResponsesCallIds({
+      model: "gpt-5.6-codex",
+      input: [
+        { type: "function_call", call_id: longId, name: "edit", arguments: "{}" },
+        { type: "function_call_output", call_id: longId, output: "ok" },
+      ],
+    });
+    const input = body.input as Array<Record<string, unknown>>;
+    const callId = String(input[0]?.call_id);
+    expect(callId.length).toBeGreaterThan(0);
+    expect(callId.length).toBeLessThanOrEqual(64);
+    expect(callId).not.toBe(longId);
+    expect(input[1]?.call_id).toBe(callId);
+  });
+
+  it("maps the same oversized id to the same short id across items", () => {
+    const longId = `fc_${"x".repeat(86)}`;
+    const body = ensureResponsesCallIds({
+      model: "gpt-5.6-codex",
+      input: [
+        { type: "function_call", call_id: longId, name: "Read", arguments: "{}" },
+        { type: "function_call_output", call_id: longId, output: "a" },
+        { type: "function_call", call_id: longId, name: "Read", arguments: "{}" },
+        { type: "function_call_output", call_id: longId, output: "b" },
+      ],
+    });
+    const input = body.input as Array<Record<string, unknown>>;
+    const ids = input.map((item) => String(item.call_id));
+    expect(new Set(ids).size).toBe(1);
+    expect(ids[0]!.length).toBeLessThanOrEqual(64);
+  });
+});
+
+describe("chatToResponses oversized tool_call_id", () => {
+  it("clamps long tool call ids while pairing results", () => {
+    const longId = `toolu_${"b".repeat(80)}`;
+    const body = chatToResponses(
+      {
+        messages: [
+          { role: "user", content: "go" },
+          {
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              { id: longId, type: "function", function: { name: "edit", arguments: "{}" } },
+            ],
+          },
+          { role: "tool", tool_call_id: longId, content: "done" },
+        ],
+      },
+      "gpt-5.6-codex",
+    );
+    const input = body.input as Array<Record<string, unknown>>;
+    const call = input.find((item) => item.type === "function_call");
+    const output = input.find((item) => item.type === "function_call_output");
+    expect(String(call?.call_id).length).toBeLessThanOrEqual(64);
+    expect(output?.call_id).toBe(call?.call_id);
+  });
 });
 
 describe("chatToResponses empty tool name", () => {

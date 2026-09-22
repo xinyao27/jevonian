@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- Oversized Responses `call_id` values (longer than 64 characters) are clamped to a stable short id before upstream, so OpenAI no longer rejects the request with `string_above_max_length` while call/output pairs stay matched.
+
 ## [0.1.3] - 2026-09-22
 
 ### Added
