@@ -8,6 +8,14 @@ DeepSeek (and Moonshot/Kimi) thinking mode requires every assistant turn's `reas
 
 Jevonian caches `reasoning_content` from the upstream response and reinjects it on the next turn before the request leaves for DeepSeek/Kimi. If you still see the error, confirm the turn is going through Jevonian (check **Logs** for the provider) and that you are on a build that includes the passback fix. Restart the proxy after upgrading so the new code is loaded.
 
+## Cursor shows `Provider Error` / `finding the resource you requested`
+
+That English string is Cursor's wrapper, not text Jevonian emits. Cursor Agent reaches Jevonian through the **public tunnel** (cloud → ngrok/cloudflare → `127.0.0.1:publicPort`). When the tunnel drops mid-turn, Cursor never gets a JSON body and shows this generic error; the Cursor Request ID will **not** appear in `ledger.jsonl`.
+
+Check `~/.local/share/jevonian/tunnel.log` for `heartbeat timeout` / `session closed` around the failure time, and for `dial tcp [::1]:… connection refused` (ngrok dialed IPv6 while the public listener is IPv4-only — fixed by pinning `127.0.0.1` in the ngrok command). Restart with `jevonian tunnel restart` after upgrading, or stop/start the Public endpoint card. A serve restart while the tunnel is reconnecting widens the window.
+
+Local transcripts under `~/.cursor/projects/…/agent-transcripts/` usually still hold the chat even when the UI tab looks wiped.
+
 ## The agent connects but every turn fails
 
 - **No brain configured.** `jevonian/auto` returns an error rather than guessing. Add a brain on the **Providers** page, or request a route explicitly with `jevonian/plan`.

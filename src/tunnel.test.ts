@@ -66,7 +66,7 @@ describe("buildTunnelCommand", () => {
     });
     expect(buildTunnelCommand({ enabled: true, provider: "ngrok" }, 8788)).toEqual({
       command: "ngrok",
-      args: ["http", "8788", "--log", "stdout"],
+      args: ["http", "127.0.0.1:8788", "--log", "stdout"],
     });
     expect(
       buildTunnelCommand(
@@ -81,7 +81,7 @@ describe("buildTunnelCommand", () => {
       command: "ngrok",
       args: [
         "http",
-        "8788",
+        "127.0.0.1:8788",
         "--url",
         "https://casqued-dominique-memorably.ngrok-free.dev",
         "--log",
@@ -238,7 +238,7 @@ describe("TunnelManager", () => {
     expect(manager.status()).toMatchObject({ status: "on", url: domain });
     expect(fake.lastArgs()).toEqual({
       command: "ngrok",
-      args: ["http", "8788", "--url", domain, "--log", "stdout"],
+      args: ["http", "127.0.0.1:8788", "--url", domain, "--log", "stdout"],
     });
   });
 

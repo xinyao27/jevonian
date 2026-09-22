@@ -96,7 +96,11 @@ export function buildTunnelCommand(
     return { command: "sh", args: ["-c", config.command.replaceAll("{port}", String(publicPort))] };
   }
   if (config.provider === "ngrok") {
-    const args = ["http", String(publicPort)];
+    // Pin IPv4 loopback. A bare port makes ngrok dial `localhost`, which on
+    // macOS often resolves to `::1` while the public surface only listens on
+    // 127.0.0.1 — during reconnects that shows up as `dial tcp [::1]:…:
+    // connection refused` and Cursor surfaces a generic Provider Error.
+    const args = ["http", `127.0.0.1:${publicPort}`];
     // Reserved / static domain: bind the known hostname instead of asking ngrok to mint one.
     if (config.url) args.push("--url", config.url);
     args.push("--log", "stdout");
