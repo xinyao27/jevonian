@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.0.2] - 2026-09-22
+
+### Added
+
+- Bare `jevonian` on macOS now installs a LaunchAgent, so the proxy keeps serving through terminal exits and reboots. `jevonian status` and `jevonian stop` inspect and stop it.
+
+### Changed
+
+- Restored keep-alive on idle upstream sockets: the router now holds a pooled connection for two minutes instead of Node's four-second default. The proxy's TLS handshake to an overseas egress takes about a second, and agent turns are spaced further apart than four seconds, so most turns were paying that handshake on the critical path. Routing decisions that followed a pause of four seconds or more dropped from a 1018 ms median to 367 ms.
+
+### Fixed
+
+- Empty `function_call` names are no longer rejected by the OpenAI Responses surface.
+
 ## [0.0.1] - 2026-09-21
 
 ### Added

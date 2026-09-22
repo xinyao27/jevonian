@@ -37,10 +37,7 @@ export interface ServeEntry {
  * Captured at install time so a LaunchAgent keeps pointing at the same checkout
  * (or global install) even if PATH later changes.
  */
-export function resolveServeEntry(options?: {
-  execPath?: string;
-  argv1?: string;
-}): ServeEntry {
+export function resolveServeEntry(options?: { execPath?: string; argv1?: string }): ServeEntry {
   const node = options?.execPath ?? process.execPath;
   const raw = options?.argv1 ?? process.argv[1];
   if (!raw) {
@@ -166,7 +163,9 @@ const PASSTHROUGH_ENV = [
   "no_proxy",
 ] as const;
 
-export function passthroughServiceEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+export function passthroughServiceEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
   const out: Record<string, string> = {};
   for (const key of PASSTHROUGH_ENV) {
     const value = env[key];
@@ -367,7 +366,10 @@ export function readServeLogTail(maxLines = 20): string {
   try {
     const text = readFileSync(path, "utf8");
     const lines = text.split(/\r?\n/);
-    return lines.slice(Math.max(0, lines.length - maxLines)).join("\n").trimEnd();
+    return lines
+      .slice(Math.max(0, lines.length - maxLines))
+      .join("\n")
+      .trimEnd();
   } catch {
     return "";
   }

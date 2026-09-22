@@ -85,13 +85,13 @@ Or with pnpm: `pnpm add --global jevonian`.
 
 On **macOS**, `jevonian` installs a LaunchAgent and keeps the proxy running in the background (survives terminal exit and reboots). On other platforms it serves in the foreground. Dashboard: `http://127.0.0.1:8787`.
 
-| Command | What it does |
-| --- | --- |
-| `jevonian` | Start / ensure the proxy is running |
-| `jevonian status` | Show pid and recent log (macOS) |
-| `jevonian stop` | Stop the background service (macOS) |
+| Command                     | What it does                            |
+| --------------------------- | --------------------------------------- |
+| `jevonian`                  | Start / ensure the proxy is running     |
+| `jevonian status`           | Show pid and recent log (macOS)         |
+| `jevonian stop`             | Stop the background service (macOS)     |
 | `jevonian stop --uninstall` | Stop and remove the LaunchAgent (macOS) |
-| `jevonian --foreground` | Run attached in this terminal instead |
+| `jevonian --foreground`     | Run attached in this terminal instead   |
 
 Then:
 

@@ -93,7 +93,10 @@ export JEVONIAN_CREDENTIALS="$TMP/credentials.json"
 
 node "$ROOT/scripts/mock-upstream.mjs" > "$TMP/mock.log" 2>&1 &
 MOCK_PID=$!
-node "$ROOT/dist/cli.mjs" serve > "$TMP/server.log" 2>&1 &
+# --foreground keeps this server in-process. Bare `serve` on macOS installs a
+# LaunchAgent instead, which would ignore the temp config above and talk to the
+# developer's real background service.
+node "$ROOT/dist/cli.mjs" serve --foreground > "$TMP/server.log" 2>&1 &
 JEV_PID=$!
 sleep 1
 
