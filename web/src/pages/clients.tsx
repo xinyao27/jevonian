@@ -1,6 +1,7 @@
 import { Laptop, Loader2, RefreshCw, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
+import { ClientsSkeleton } from "@/components/page-skeletons";
 import { ProviderLogo } from "@/components/provider-logo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -58,8 +59,6 @@ export function ClientsPage() {
     void refresh();
   }, [refresh]);
 
-  const clients = data?.clients ?? [];
-
   const run = useCallback(
     async (id: ClientIdView, action: "connect" | "disconnect", restart: boolean) => {
       setBusy(id);
@@ -105,6 +104,23 @@ export function ClientsPage() {
     [refresh],
   );
 
+  if (error && !data) {
+    return (
+      <div className="mx-auto flex max-w-4xl flex-col gap-6">
+        <div>
+          <h1 className="text-lg font-semibold tracking-tight">Clients</h1>
+        </div>
+        <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+          <span>{error}</span>
+        </div>
+      </div>
+    );
+  }
+  if (!data) return <ClientsSkeleton />;
+
+  const clients = data.clients;
+
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-6">
       <div className="flex items-start justify-between gap-4">
@@ -121,16 +137,14 @@ export function ClientsPage() {
         </Button>
       </div>
 
-      {data ? (
-        <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-          <Laptop className="size-3.5 shrink-0" />
-          <span>
-            Config files are written on{" "}
-            <span className="font-medium text-foreground">{data.hostname}</span> ({data.platform}).
-            Run the dashboard on the machine whose apps you want to connect.
-          </span>
-        </div>
-      ) : null}
+      <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+        <Laptop className="size-3.5 shrink-0" />
+        <span>
+          Config files are written on{" "}
+          <span className="font-medium text-foreground">{data.hostname}</span> ({data.platform}).
+          Run the dashboard on the machine whose apps you want to connect.
+        </span>
+      </div>
 
       {error ? (
         <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">

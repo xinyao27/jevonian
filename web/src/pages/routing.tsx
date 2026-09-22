@@ -19,6 +19,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { GripVertical, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { RoutingSkeleton } from "@/components/page-skeletons";
 import { ProviderLogo } from "@/components/provider-logo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -789,7 +790,7 @@ export function RoutingPage() {
     return true;
   }
 
-  if (!saved || !state) return <p className="text-sm text-muted-foreground">Loading…</p>;
+  if (!saved || !state) return <RoutingSkeleton />;
 
   const brains = saved.brains ?? [];
   const primaryBrain = brains[0];

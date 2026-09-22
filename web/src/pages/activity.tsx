@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
 
 import { RequestsChart, SpendChart, TokensChart } from "@/components/activity-charts";
+import { ActivitySkeleton } from "@/components/page-skeletons";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -11,6 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
   TableBody,
@@ -62,6 +64,10 @@ export function ActivityPage() {
   useEffect(() => {
     void loadData();
   }, [loadData]);
+
+  if (loading && !report) {
+    return <ActivitySkeleton />;
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -304,8 +310,14 @@ export function ActivityPage() {
             <RequestsChart series={report.series} loading={loading} />
           )
         ) : (
-          <Card className="h-44 flex items-center justify-center text-sm text-muted-foreground">
-            Loading chart data…
+          <Card className="overflow-hidden border bg-card/70">
+            <CardHeader className="pb-2">
+              <Skeleton className="h-4 w-36" />
+              <Skeleton className="h-3 w-56" />
+            </CardHeader>
+            <CardContent className="pt-2">
+              <Skeleton className="h-44 w-full rounded-md" />
+            </CardContent>
           </Card>
         )}
       </div>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
 
+import { LogDetailSkeleton } from "@/components/page-skeletons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -345,7 +346,7 @@ export function LogDetailPage() {
   }, [load]);
 
   if (error) return <p className="text-sm text-destructive">{error}</p>;
-  if (!detail) return <p className="text-sm text-muted-foreground">Loading…</p>;
+  if (!detail) return <LogDetailSkeleton />;
 
   const body = (detail.body ?? {}) as Record<string, unknown>;
   const messages = promptMessages(body.body);

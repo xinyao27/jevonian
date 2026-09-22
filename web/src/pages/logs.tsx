@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 
 import { RequestsChart } from "@/components/activity-charts";
+import { LogsTableSkeleton } from "@/components/page-skeletons";
 import { ProviderLogo } from "@/components/provider-logo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,6 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useLogStream } from "@/hooks/use-log-stream";
 import { useVirtualizer } from "@/hooks/use-virtualizer";
 import {
@@ -361,9 +363,7 @@ export function LogsPage() {
           className="relative min-h-0 flex-1 divide-y divide-border/40 overflow-x-hidden overflow-y-auto"
         >
           {loadingInitial ? (
-            <div className="flex h-40 items-center justify-center text-sm text-muted-foreground animate-pulse">
-              Loading requests...
-            </div>
+            <LogsTableSkeleton rows={12} />
           ) : logs.length === 0 ? (
             <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
               {filtered
@@ -468,8 +468,15 @@ export function LogsPage() {
           )}
 
           {loadingMore ? (
-            <div className="border-t bg-muted/20 py-2.5 text-center text-xs text-muted-foreground animate-pulse">
-              Loading older records...
+            <div className="flex flex-col gap-0 border-t bg-muted/20 px-4 py-2">
+              {Array.from({ length: 3 }, (_, index) => (
+                <div key={index} className="grid grid-cols-12 items-center gap-2 py-1.5">
+                  <Skeleton className="col-span-1 h-3 w-10" />
+                  <Skeleton className="col-span-3 h-3 w-[80%]" />
+                  <Skeleton className="col-span-2 h-3 w-16" />
+                  <Skeleton className="col-span-6 h-3 w-full" />
+                </div>
+              ))}
             </div>
           ) : nextBefore === null && logs.length > 0 ? (
             <div className="border-t bg-muted/10 py-2.5 text-center text-xs text-muted-foreground">

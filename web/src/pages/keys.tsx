@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
 
+import { KeysSkeleton } from "@/components/page-skeletons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -33,6 +34,7 @@ function usagePercent(spend: number, limit: number | null | undefined): number {
 
 export function KeysPage() {
   const [keys, setKeys] = useState<KeyView[]>([]);
+  const [ready, setReady] = useState(false);
   const [name, setName] = useState("my-agent");
   const [newLimit, setNewLimit] = useState("");
   const [createdKey, setCreatedKey] = useState("");
@@ -53,6 +55,8 @@ export function KeysPage() {
       setKeys(state.keys);
     } catch (cause) {
       setError(String(cause));
+    } finally {
+      setReady(true);
     }
   }, []);
 
@@ -143,6 +147,8 @@ export function KeysPage() {
       setBusy(false);
     }
   }
+
+  if (!ready) return <KeysSkeleton />;
 
   return (
     <div className="flex flex-col gap-6">

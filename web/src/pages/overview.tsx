@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
+import { OverviewSkeleton } from "@/components/page-skeletons";
 import { QuotaGrid } from "@/components/quota-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -184,7 +185,7 @@ export function OverviewPage() {
   }
 
   if (error) return <p className="text-sm text-destructive">{error}</p>;
-  if (!state || !stats) return <p className="text-sm text-muted-foreground">Loading…</p>;
+  if (!state || !stats) return <OverviewSkeleton />;
 
   const localUrl = `http://${state.config.listen.host}:${state.config.listen.port}/v1`;
   const publicUrl = tunnel?.status === "on" && tunnel.url ? `${tunnel.url}/v1` : undefined;

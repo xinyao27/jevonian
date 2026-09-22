@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { BrainSection } from "@/components/brain-section";
 import { KeysHelp } from "@/components/keys-help";
+import { ProvidersSkeleton } from "@/components/page-skeletons";
 import { ProviderLogo } from "@/components/provider-logo";
 import { QuotaGrid } from "@/components/quota-card";
 import { Badge } from "@/components/ui/badge";
@@ -353,6 +354,9 @@ export function ProvidersPage() {
   };
 
   const needsApiKey = auth === "api-key" || oauthSource === "static";
+
+  if (error && !state) return <p className="text-sm text-destructive">{error}</p>;
+  if (!state) return <ProvidersSkeleton />;
 
   return (
     <div className="flex flex-col gap-6">
