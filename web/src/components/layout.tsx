@@ -6,12 +6,12 @@ import {
   RouteIcon,
   ScrollTextIcon,
   ServerIcon,
-  StarIcon,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink, Outlet } from "react-router";
 
 import { ErrorBoundary } from "@/components/error-boundary";
+import { ModeToggle } from "@/components/mode-toggle";
 import {
   Sidebar,
   SidebarContent,
@@ -93,15 +93,15 @@ export function Layout() {
                 {links.map((link) => (
                   <SidebarMenuItem key={link.to}>
                     <SidebarMenuButton
-                      asChild
                       tooltip={link.label}
                       className="[&.active]:bg-sidebar-accent [&.active]:font-medium [&.active]:text-sidebar-accent-foreground"
-                    >
-                      <NavLink to={link.to} end={link.end}>
-                        <link.icon />
-                        <span>{link.label}</span>
-                      </NavLink>
-                    </SidebarMenuButton>
+                      render={
+                        <NavLink to={link.to} end={link.end}>
+                          <link.icon />
+                          <span>{link.label}</span>
+                        </NavLink>
+                      }
+                    />
                   </SidebarMenuItem>
                 ))}
               </SidebarMenu>
@@ -109,17 +109,23 @@ export function Layout() {
           </SidebarGroup>
         </SidebarContent>
         <SidebarFooter className="border-t border-sidebar-border">
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton asChild tooltip="Star on GitHub" className="text-muted-foreground">
-                <a href={GITHUB_REPO} target="_blank" rel="noreferrer">
-                  <GitHubIcon className="size-4 shrink-0" />
-                  <span>Star on GitHub</span>
-                  <StarIcon className="ml-auto size-3.5 opacity-70" />
-                </a>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
+          <div className="flex items-center gap-1 group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:items-stretch">
+            <SidebarMenu className="min-w-0 flex-1">
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  tooltip="Star on GitHub"
+                  className="text-muted-foreground"
+                  render={
+                    <a href={GITHUB_REPO} target="_blank" rel="noreferrer">
+                      <GitHubIcon className="size-4 shrink-0" />
+                      <span>Star on GitHub</span>
+                    </a>
+                  }
+                />
+              </SidebarMenuItem>
+            </SidebarMenu>
+            <ModeToggle className="group-data-[collapsible=icon]:w-full" />
+          </div>
         </SidebarFooter>
         <SidebarRail />
       </Sidebar>

@@ -1,6 +1,6 @@
+import { useRender } from "@base-ui-components/react/use-render";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "cn";
-import { Slot } from "radix-ui";
 import * as React from "react";
 
 const buttonVariants = cva(
@@ -35,27 +35,31 @@ const buttonVariants = cva(
   },
 );
 
+/**
+ * Base UI's `useRender` replaces Radix's `Slot`: pass `render` to swap the host
+ * element (or compose with another component) while keeping the button styles.
+ */
 function Button({
   className,
   variant = "default",
   size = "default",
-  asChild = false,
+  render,
   ...props
 }: React.ComponentProps<"button"> &
   VariantProps<typeof buttonVariants> & {
-    asChild?: boolean;
+    render?: useRender.RenderProp;
   }) {
-  const Comp = asChild ? Slot.Root : "button";
-
-  return (
-    <Comp
-      data-slot="button"
-      data-variant={variant}
-      data-size={size}
-      className={cn(buttonVariants({ variant, size, className }))}
-      {...props}
-    />
-  );
+  return useRender({
+    defaultTagName: "button",
+    render,
+    props: {
+      "data-slot": "button",
+      "data-variant": variant,
+      "data-size": size,
+      className: cn(buttonVariants({ variant, size, className })),
+      ...props,
+    },
+  });
 }
 
 export { Button, buttonVariants };

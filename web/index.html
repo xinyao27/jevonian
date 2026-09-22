@@ -6,6 +6,27 @@
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>Jevonian</title>
+    <script>
+      // Runs before first paint so the page never flashes the wrong theme.
+      // Kept in sync with applyThemeClass in src/components/theme-provider.tsx.
+      (function () {
+        try {
+          var stored = localStorage.getItem("jevonian-theme");
+          var theme =
+            stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+          var resolved =
+            theme === "system"
+              ? window.matchMedia("(prefers-color-scheme: dark)").matches
+                ? "dark"
+                : "light"
+              : theme;
+          document.documentElement.classList.add(resolved);
+          document.documentElement.style.colorScheme = resolved;
+        } catch (error) {
+          /* private mode or blocked storage: fall back to the CSS default */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
