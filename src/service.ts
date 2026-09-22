@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import { serveLogPath } from "./paths";
+import { augmentPath } from "./user-path";
 
 export { serveLogPath };
 
@@ -147,6 +148,46 @@ function jobTarget(): string {
   return `${guiDomain()}/${SERVICE_LABEL}`;
 }
 
+/** Sync sleep for launchd settle windows (bootout → bootstrap races on error 5). */
+function sleepMs(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function bootstrapDetail(result: { stdout: string; stderr: string }): string {
+  return (result.stderr || result.stdout || "").trim();
+}
+
+/**
+ * Register the LaunchAgent, retrying macOS's transient "Bootstrap failed: 5: Input/output error"
+ * that shows up when bootout has not finished tearing the old job down.
+ */
+export function bootstrapService(plistPath = servicePlistPath()): void {
+  if (serviceStatus().loaded) return;
+  const domain = guiDomain();
+  let last = { status: 1, stdout: "", stderr: "bootstrap not attempted" };
+  for (let attempt = 0; attempt < 6; attempt++) {
+    if (attempt > 0) sleepMs(100 * 2 ** (attempt - 1)); // 100, 200, 400, 800, 1600
+    last = launchctl(["bootstrap", domain, plistPath]);
+    if (last.status === 0) return;
+    // A racing RunAtLoad / prior attempt may have won; treat as success.
+    if (serviceStatus().loaded) return;
+    const detail = bootstrapDetail(last);
+    if (/already (?:bootstrapped|loaded)/i.test(detail)) return;
+    // Only retry the known transient EIO; other failures fail fast.
+    if (!/Input\/output error|\bBootstrap failed:\s*5\b/i.test(detail)) break;
+  }
+  if (serviceStatus().loaded) return;
+  throw new Error(
+    `launchctl bootstrap failed: ${bootstrapDetail(last) || `exit ${last.status}`}`,
+  );
+}
+
+function bootoutQuiet(): void {
+  launchctl(["bootout", jobTarget()]);
+  // launchd needs a beat before the label can be bootstrapped again.
+  sleepMs(200);
+}
+
 /** Environment keys that should move with the LaunchAgent when present at install. */
 const PASSTHROUGH_ENV = [
   "JEVONIAN_CONFIG",
@@ -229,18 +270,19 @@ export function installService(options?: {
     node: entry.node,
     entry: entry.entry,
     logPath,
-    env: { ...passthroughServiceEnv(), ...options?.env },
+    // Bake a usable PATH: launchd defaults to /usr/bin:/bin:/usr/sbin:/sbin,
+    // which hides Homebrew ngrok/cloudflared from tunnel spawns.
+    env: {
+      PATH: augmentPath(process.env.PATH),
+      ...passthroughServiceEnv(),
+      ...options?.env,
+    },
     workingDirectory: dirname(entry.entry),
   });
   // Replace any previous registration so KeepAlive / ProgramArguments stay in sync.
   bootoutQuiet();
   writeFileSync(servicePlistPath(), plist, { mode: 0o644 });
-  const boot = launchctl(["bootstrap", guiDomain(), servicePlistPath()]);
-  if (boot.status !== 0) {
-    throw new Error(
-      `launchctl bootstrap failed: ${(boot.stderr || boot.stdout || `exit ${boot.status}`).trim()}`,
-    );
-  }
+  bootstrapService();
   // Ensure it is running even if RunAtLoad raced with an existing listener.
   launchctl(["kickstart", "-k", jobTarget()]);
   return serviceStatus();
@@ -257,15 +299,7 @@ export function startService(): ServiceStatus {
   if (!existsSync(servicePlistPath())) {
     throw new Error(`Service is not installed. Run \`jevonian\` first.`);
   }
-  const status = serviceStatus();
-  if (!status.loaded) {
-    const boot = launchctl(["bootstrap", guiDomain(), servicePlistPath()]);
-    if (boot.status !== 0) {
-      throw new Error(
-        `launchctl bootstrap failed: ${(boot.stderr || boot.stdout || `exit ${boot.status}`).trim()}`,
-      );
-    }
-  }
+  if (!serviceStatus().loaded) bootstrapService();
   launchctl(["kickstart", "-k", jobTarget()]);
   return serviceStatus();
 }
@@ -326,12 +360,23 @@ export type EnsureServiceResult = {
   action: "installed" | "updated" | "started" | "running";
 };
 
+/** True when the installed agent already carries a PATH (post user-bin fix). */
+export function installedPlistHasPath(plistPath = servicePlistPath()): boolean {
+  if (!existsSync(plistPath)) return false;
+  try {
+    return readFileSync(plistPath, "utf8").includes("<key>PATH</key>");
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Make sure the LaunchAgent exists, points at this CLI, and is running.
  *
  * Used by bare `jevonian` on macOS so a new install is persistently up without a
  * separate install step. Avoids restarting when the job is already healthy with
- * the same ProgramArguments.
+ * the same ProgramArguments. PATH for Homebrew tunnel CLIs is applied at serve
+ * start and baked into the plist whenever we do reinstall.
  */
 export function ensureService(options?: {
   entry?: ServeEntry;
@@ -342,6 +387,9 @@ export function ensureService(options?: {
   const installed = readInstalledServeEntry();
   const sameEntry =
     installed !== undefined && installed.node === entry.node && installed.entry === entry.entry;
+  // Do not force a bootout cycle just to add PATH — that races launchd (error 5).
+  // Runtime applyUserBinPath + spawn-time PATH cover tunnels; PATH is written on
+  // the next real install/update.
   if (!sameEntry) {
     const status = installService({ entry, env: options?.env });
     return { status, action: installed ? "updated" : "installed" };
@@ -352,11 +400,6 @@ export function ensureService(options?: {
     return { status, action: "started" };
   }
   return { status: current, action: "running" };
-}
-
-function bootoutQuiet(): void {
-  launchctl(["bootout", jobTarget()]);
-  // Older macOS / already-unloaded jobs return non-zero; that is fine.
 }
 
 /** Read the last N lines of the serve log for `service status` diagnostics. */

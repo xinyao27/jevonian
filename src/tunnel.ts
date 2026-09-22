@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 
 import type { TunnelConfig } from "./config";
 import { scrubProxyEnv } from "./proxy";
+import { withAugmentedPath } from "./user-path";
 
 export type TunnelProvider = "cloudflare" | "ngrok" | "custom";
 export type TunnelStatus = "off" | "starting" | "on" | "error";
@@ -200,7 +201,8 @@ export class TunnelManager {
         stdio: logFd === undefined ? ["ignore", "pipe", "pipe"] : ["ignore", logFd, logFd],
         // Tunnel binaries must dial Cloudflare/ngrok directly. Inheriting a local
         // Clash-style HTTPS_PROXY is how a healthy tunnel turns into socket resets.
-        env: scrubProxyEnv(process.env),
+        // Augment PATH so launchd / GUI-started serves still find Homebrew ngrok.
+        env: withAugmentedPath(scrubProxyEnv(process.env)),
         detached: this.detached,
       });
     } catch (error) {

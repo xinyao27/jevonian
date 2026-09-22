@@ -8,6 +8,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { normalizeTunnelUrl, parseTunnel } from "./config";
 import { buildTunnelCommand, extractTunnelUrl, TunnelManager, type TunnelHost } from "./tunnel";
+import { augmentPath } from "./user-path";
 
 describe("normalizeTunnelUrl / parseTunnel", () => {
   it("accepts full URLs and bare hostnames", () => {
@@ -184,10 +185,26 @@ describe("TunnelManager", () => {
       });
       manager.start();
       expect(fake.lastEnv()?.HTTPS_PROXY).toBeUndefined();
-      expect(fake.lastEnv()?.PATH).toBe(process.env.PATH);
+      expect(fake.lastEnv()?.PATH).toBe(augmentPath(process.env.PATH));
     } finally {
       if (previous === undefined) delete process.env.HTTPS_PROXY;
       else process.env.HTTPS_PROXY = previous;
+    }
+  });
+
+  it("finds Homebrew bin dirs even under a launchd PATH", () => {
+    const previous = process.env.PATH;
+    process.env.PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
+    try {
+      const fake = fakeSpawn();
+      const manager = new TunnelManager({ enabled: true, provider: "ngrok" }, 8787, {
+        spawnFn: fake.spawn as never,
+        timeoutMs: 1_000,
+      });
+      manager.start();
+      expect(fake.lastEnv()?.PATH).toBe(augmentPath("/usr/bin:/bin:/usr/sbin:/sbin"));
+    } finally {
+      process.env.PATH = previous;
     }
   });
 

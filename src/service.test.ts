@@ -7,11 +7,13 @@ import { expect, it } from "vite-plus/test";
 import {
   SERVICE_LABEL,
   buildServicePlist,
+  installedPlistHasPath,
   isManagedByLaunchd,
   passthroughServiceEnv,
   readInstalledServeEntry,
   resolveServeEntry,
 } from "./service";
+import { augmentPath } from "./user-path";
 
 it("detects our LaunchAgent via XPC_SERVICE_NAME", () => {
   expect(isManagedByLaunchd({ XPC_SERVICE_NAME: SERVICE_LABEL })).toBe(true);
@@ -40,7 +42,7 @@ it("builds a KeepAlive LaunchAgent plist with serve arguments", () => {
     node: "/opt/homebrew/bin/node",
     entry: "/Users/me/jevonian/dist/cli.mjs",
     logPath: "/Users/me/.local/share/jevonian/serve.log",
-    env: { JEVONIAN_CONFIG: "/tmp/config.json" },
+    env: { JEVONIAN_CONFIG: "/tmp/config.json", PATH: "/opt/homebrew/bin:/usr/bin:/bin" },
   });
   expect(plist).toContain(`<string>${SERVICE_LABEL}</string>`);
   expect(plist).toContain("<string>/opt/homebrew/bin/node</string>");
@@ -53,7 +55,47 @@ it("builds a KeepAlive LaunchAgent plist with serve arguments", () => {
   expect(plist).toContain("<string>1</string>");
   expect(plist).toContain("JEVONIAN_CONFIG");
   expect(plist).toContain("/tmp/config.json");
+  expect(plist).toContain("<key>PATH</key>");
+  expect(plist).toContain("/opt/homebrew/bin:/usr/bin:/bin");
   expect(plist).toContain("/Users/me/.local/share/jevonian/serve.log");
+});
+
+it("detects whether an installed plist already bakes PATH", () => {
+  const dir = mkdtempSync(join(tmpdir(), "jev-plist-path-"));
+  try {
+    const without = join(dir, "without.plist");
+    const withPath = join(dir, "with.plist");
+    writeFileSync(
+      without,
+      buildServicePlist({
+        node: "/opt/homebrew/bin/node",
+        entry: "/Users/me/jevonian/dist/cli.mjs",
+        logPath: "/tmp/serve.log",
+      }),
+    );
+    writeFileSync(
+      withPath,
+      buildServicePlist({
+        node: "/opt/homebrew/bin/node",
+        entry: "/Users/me/jevonian/dist/cli.mjs",
+        logPath: "/tmp/serve.log",
+        env: { PATH: augmentPath("/usr/bin:/bin") },
+      }),
+    );
+    expect(installedPlistHasPath(without)).toBe(false);
+    expect(installedPlistHasPath(withPath)).toBe(true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("recognises the transient launchctl bootstrap EIO message", () => {
+  expect(/Input\/output error|\bBootstrap failed:\s*5\b/i.test(
+    "Bootstrap failed: 5: Input/output error\nTry re-running the command as root for richer errors.",
+  )).toBe(true);
+  expect(/Input\/output error|\bBootstrap failed:\s*5\b/i.test("Bootstrap failed: 125: Domain does not support specified action")).toBe(
+    false,
+  );
 });
 
 it("escapes XML special characters in plist paths", () => {

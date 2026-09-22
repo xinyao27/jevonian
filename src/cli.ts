@@ -53,6 +53,7 @@ import {
 } from "./service";
 import { TunnelManager } from "./tunnel";
 import { formatUpdateNotice, UPDATE_INTERVAL_MS, UpdateManager } from "./updates";
+import { applyUserBinPath } from "./user-path";
 
 /** How often serve re-runs a (cache-aware) update check while staying up. */
 const UPDATE_POLL_MS = 60 * 60 * 1_000;
@@ -921,6 +922,9 @@ async function main(): Promise<void> {
       await ensurePersistentServe();
       return;
     }
+    // launchd PATH is /usr/bin:/bin:/usr/sbin:/sbin — restore Homebrew / local bins
+    // so tunnel providers (ngrok, cloudflared) resolve without a shell profile.
+    applyUserBinPath();
     const loaded = loadConfig();
     const config = loaded ?? parseConfig({});
     if (!loaded) {
