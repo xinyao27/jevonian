@@ -5,6 +5,7 @@ import {
   formatFetchError,
   isTransientProxyError,
   parseScutilProxy,
+  proxyAgentOptions,
   scrubProxyEnv,
   type SystemProxy,
 } from "./proxy";
@@ -117,6 +118,30 @@ describe("applySystemProxy", () => {
     const env: NodeJS.ProcessEnv = {};
     expect(applySystemProxy(env, () => undefined)).toBeUndefined();
     expect(env.HTTPS_PROXY).toBeUndefined();
+  });
+});
+
+describe("proxyAgentOptions", () => {
+  it("holds idle sockets far longer than undici's 4s default", () => {
+    // The default drops the pooled connection before the next agent turn, so every
+    // turn to a proxied host pays a fresh TLS handshake on the critical path.
+    const options = proxyAgentOptions();
+    expect(options.keepAliveTimeout).toBe(120_000);
+    expect(options.keepAliveTimeout).toBeGreaterThan(4_000);
+  });
+
+  it("keeps the caller's proxy settings alongside it", () => {
+    const options = proxyAgentOptions({
+      httpProxy: "http://127.0.0.1:1082",
+      httpsProxy: "http://127.0.0.1:1082",
+      noProxy: "localhost,127.0.0.1",
+    });
+    expect(options).toEqual({
+      httpProxy: "http://127.0.0.1:1082",
+      httpsProxy: "http://127.0.0.1:1082",
+      noProxy: "localhost,127.0.0.1",
+      keepAliveTimeout: 120_000,
+    });
   });
 });
 

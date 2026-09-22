@@ -169,12 +169,55 @@ export function formatFetchError(error: unknown): string {
   return parts.length === 0 ? String(error) : parts.join(" caused by ");
 }
 
+/**
+ * How long an idle keep-alive socket is kept for reuse.
+ *
+ * undici defaults to 4s, which is far shorter than the gap between two turns of a
+ * coding agent: the model spends seconds generating, then the user reads the reply
+ * before the next request goes out. So the pooled connection to whatever host was
+ * reached through the system proxy is already gone by the time the next turn needs
+ * it, and the request pays a fresh TLS handshake on the critical path.
+ *
+ * That handshake is not cheap on a proxied host. Measured on a machine whose proxy
+ * egresses overseas: TCP connect to the local proxy was 0.1ms, but a fresh TLS
+ * handshake to the brain endpoint was ~1050ms, against ~29ms for a host with a
+ * domestic edge. A provider without a local edge therefore lost about a second per
+ * turn to re-handshaking, and it hit the routing brain on most turns — 60% of brain
+ * calls followed a gap of 4s or more, at p50 1018ms versus 367ms warm.
+ *
+ * Every provider request shares this dispatcher, so the cost applied to all of them.
+ * Holding sockets for 2 minutes measured 1274ms -> 307ms across a 15s idle gap.
+ *
+ * Note the server's own keep-alive hint can override this, capped by
+ * `keepAliveMaxTimeout` (10 minutes by default).
+ */
+const KEEP_ALIVE_TIMEOUT_MS = 120_000;
+
+/**
+ * Builds the dispatcher options, with the socket-lifetime policy applied.
+ *
+ * Split out so the keep-alive setting is testable without reaching into undici's
+ * private pool internals, which is the only place it is otherwise observable.
+ */
+export function proxyAgentOptions(options?: {
+  httpProxy?: string;
+  httpsProxy?: string;
+  noProxy?: string;
+}): {
+  httpProxy?: string;
+  httpsProxy?: string;
+  noProxy?: string;
+  keepAliveTimeout: number;
+} {
+  return { ...options, keepAliveTimeout: KEEP_ALIVE_TIMEOUT_MS };
+}
+
 function installProxyAgent(options?: {
   httpProxy?: string;
   httpsProxy?: string;
   noProxy?: string;
 }): void {
-  const agent = new EnvHttpProxyAgent(options);
+  const agent = new EnvHttpProxyAgent(proxyAgentOptions(options));
   // Pool-level socket drops are not attached to any fetch promise; swallowing them here
   // keeps the process alive while individual callers still see their own rejections.
   const sink = agent as unknown as { on: (event: string, listener: () => void) => void };
@@ -229,7 +272,15 @@ export function useSystemProxy(
     return undefined;
   }
   const proxy = detect();
-  if (!proxy) return undefined;
+  if (!proxy) {
+    // No proxy to route through, but the keep-alive tuning still applies: without a
+    // dispatcher of our own, fetch falls back to undici's default and drops idle
+    // sockets after 4s, so a direct host is re-handshaked every turn too. A plain
+    // Agent is cheaper to reconnect to than a proxied one, but it is the same waste.
+    // Installing here keeps both paths on one socket-lifetime policy.
+    installProxyAgent();
+    return undefined;
+  }
   const noProxy = mergeBypass(env.NO_PROXY, [...LOOPBACK_BYPASS, ...proxy.bypass]);
   installProxyAgent({ httpProxy: proxy.url, httpsProxy: proxy.url, noProxy });
   return proxy;
