@@ -194,6 +194,26 @@ export function formatFetchError(error: unknown): string {
 const KEEP_ALIVE_TIMEOUT_MS = 120_000;
 
 /**
+ * Pins egress to HTTP/1.1.
+ *
+ * undici's fetch negotiates HTTP/2 with any https origin that advertises it, and
+ * HTTP/2 breaks the pairing Jevonian actually runs: a userland dispatcher installed
+ * with `setGlobalDispatcher` plus Node's *built-in* fetch. undici 8.11.0 stopped
+ * forcing HTTP/1.1 for the built-in fetch's legacy handler, and every response then
+ * arrived with an empty `headers` object and its body still compressed — so balance
+ * checks died on `Unexpected token` and the dashboard lost every quota window. The
+ * built-in fetch decompresses and follows redirects on the HTTP/1.1 path only.
+ *
+ * Forcing HTTP/1.1 also keeps the keep-alive policy below in charge of the pooled
+ * socket: HTTP/2 ignores it and idles sessions out on its own schedule, undoing the
+ * handshake savings the timeout exists for.
+ *
+ * That is the same connection undici 8.10.x handed the built-in fetch on its own, so
+ * this restores the behaviour Jevonian was built and measured against.
+ */
+const ALLOW_H2 = false;
+
+/**
  * Builds the dispatcher options, with the socket-lifetime policy applied.
  *
  * Split out so the keep-alive setting is testable without reaching into undici's
@@ -208,8 +228,9 @@ export function proxyAgentOptions(options?: {
   httpsProxy?: string;
   noProxy?: string;
   keepAliveTimeout: number;
+  allowH2: boolean;
 } {
-  return { ...options, keepAliveTimeout: KEEP_ALIVE_TIMEOUT_MS };
+  return { ...options, keepAliveTimeout: KEEP_ALIVE_TIMEOUT_MS, allowH2: ALLOW_H2 };
 }
 
 function installProxyAgent(options?: {

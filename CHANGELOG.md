@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.1.2] - 2026-09-22
+
+### Fixed
+
+- Quota meters no longer fail with `SyntaxError: Unexpected token … is not valid JSON` and report healthy providers as spent. undici 8.11.0 stopped forcing HTTP/1.1 for Node's built-in `fetch` when a dispatcher is installed, and over HTTP/2 that combination returns an empty header set and a still-compressed body. Jevonian's dispatcher is now pinned to HTTP/1.1, which is the connection undici 8.10.x handed the built-in fetch on its own.
+- A provider recorded as `rejected` from a 429/402 is no longer stuck that way. The rejection snapshot is now cleared as soon as a live quota probe succeeds, so a limit that has since reset stops withholding the provider from routing. A failed probe still leaves the snapshot in place.
+- An update that cannot finish draining now restarts anyway instead of leaving the dashboard on 503 until a manual restart.
+
 ## [0.1.1] - 2026-09-22
 
 ### Added

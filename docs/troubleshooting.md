@@ -47,6 +47,20 @@ Transient socket resets from a local proxy (Clash and friends) are detected and 
 
 Some vendors reject the usage endpoints even when normal inference works, especially when the request arrives without the expected client identity. This is not a routing failure — the ledger-based fallback still applies sense to spend when the provider declares caps.
 
+## Quota meters show a JSON parse error and healthy providers look spent
+
+A meter reading something like:
+
+```
+SyntaxError: Unexpected token '\x1f', "\x1f\x8b\x08..." is not valid JSON
+```
+
+with the provider at `100.0% used · 0.0% left · rejected` and a **from responses** badge is not the vendor refusing you. The response arrived with its body still compressed, so the balance check could not read it and fell back to the last snapshot — which is the `rejected` window recorded the last time that provider genuinely refused. Routing then treats those providers as spent, and `serve.log` reports `quota: routing around <provider> (limit reached)`.
+
+The trigger is undici 8.11.0, which stopped forcing HTTP/1.1 for Node's built-in `fetch` when a userland dispatcher is installed. Over HTTP/2 that combination returns an empty header set and an undecoded body. Jevonian pins its dispatcher to HTTP/1.1 so this cannot recur; on an affected build, pin `undici` to `8.10.2` or upgrade to one that includes the fix.
+
+A provider keeps its stale `rejected` window until the next successful live fetch, and serve refreshes every provider at boot — so restarting once on the fixed build clears the meters.
+
 ## Updating from a source checkout does nothing
 
 `jevonian update` is registry-based. Source checkouts never self-update: pull and rebuild instead.

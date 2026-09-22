@@ -130,6 +130,13 @@ describe("proxyAgentOptions", () => {
     expect(options.keepAliveTimeout).toBeGreaterThan(4_000);
   });
 
+  it("pins egress to HTTP/1.1", () => {
+    // HTTP/2 hands Node's built-in fetch a response with no headers and a still
+    // compressed body, which is how every quota lookup started failing on undici
+    // 8.11.0. The socket-lifetime policy above is also HTTP/1.1-only.
+    expect(proxyAgentOptions().allowH2).toBe(false);
+  });
+
   it("keeps the caller's proxy settings alongside it", () => {
     const options = proxyAgentOptions({
       httpProxy: "http://127.0.0.1:1082",
@@ -141,6 +148,7 @@ describe("proxyAgentOptions", () => {
       httpsProxy: "http://127.0.0.1:1082",
       noProxy: "localhost,127.0.0.1",
       keepAliveTimeout: 120_000,
+      allowH2: false,
     });
   });
 });

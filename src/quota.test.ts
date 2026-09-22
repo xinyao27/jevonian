@@ -662,3 +662,89 @@ describe("quota headers", () => {
     expect(quotas[0]?.windows.find((window) => window.id === "month")?.usedPercent).toBeCloseTo(10);
   });
 });
+
+describe("recovery from a recorded rejection", () => {
+  const config = () =>
+    parseConfig({
+      providers: [
+        {
+          name: "openrouter",
+          type: "openai",
+          baseUrl: "https://openrouter.ai/api/v1",
+          apiKey: "key",
+          billing: "api",
+          models: ["openai/gpt-6"],
+        },
+      ],
+    });
+
+  const recordRejection = (target: ReturnType<typeof config>) => {
+    captureUsageLimit(
+      target.providers[0]!,
+      402,
+      JSON.stringify({ error: { type: "insufficient_credits" } }),
+    );
+    expect(headerQuotas().openrouter?.windows[0]?.status).toBe("rejected");
+  };
+
+  it("forgets a rejection once the live probe answers again", async () => {
+    const parsed = config();
+    recordRejection(parsed);
+
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(JSON.stringify({ data: { total_credits: 40, total_usage: 10 } }), {
+          status: 200,
+        }),
+    );
+
+    const quotas = await providerQuotas(parsed, { refresh: true });
+    expect(quotas[0]?.source).toBe("live");
+    // The rejection is dropped, not just outranked: the on-disk snapshot is what the
+    // routing guard falls back to whenever the live cache goes cold, so leaving the
+    // 100%-used window behind would re-exhaust the provider a minute later.
+    expect(headerQuotas().openrouter).toBeUndefined();
+    expect(providerQuotaHealth(parsed.providers[0]!).status).not.toBe("exhausted");
+  });
+
+  it("keeps the rejection when the live probe still fails", async () => {
+    const parsed = config();
+    recordRejection(parsed);
+
+    vi.stubGlobal("fetch", async () => new Response("nope", { status: 500 }));
+
+    const quotas = await providerQuotas(parsed, { refresh: true });
+    expect(quotas[0]?.source).toBe("headers");
+    // A failed probe proves nothing, so the provider stays skipped and keeps its
+    // reset time rather than being handed back to routing on a guess.
+    expect(headerQuotas().openrouter?.windows[0]?.status).toBe("rejected");
+    expect(providerQuotaHealth(parsed.providers[0]!).status).toBe("exhausted");
+  });
+
+  it("leaves an observed snapshot alone", async () => {
+    const parsed = config();
+    // A window that came from real headers is a measurement, not a refusal marker.
+    writeFileSync(
+      quotaStatePath(),
+      `${JSON.stringify({
+        openrouter: {
+          windows: [{ id: "balance", label: "balance", usedPercent: 0 }],
+          fetchedAt: new Date().toISOString(),
+        },
+      })}\n`,
+    );
+    resetQuotaCache();
+
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(JSON.stringify({ data: { total_credits: 40, total_usage: 10 } }), {
+          status: 200,
+        }),
+    );
+
+    await providerQuotas(parsed, { refresh: true });
+    expect(headerQuotas().openrouter?.windows[0]?.usedPercent).toBe(0);
+  });
+});

@@ -206,6 +206,29 @@ function saveHeaderQuotas(next: HeaderQuotaFile): void {
   }
 }
 
+/**
+ * Forgets a snapshot recorded by {@link captureUsageLimit}.
+ *
+ * Those snapshots exist to make the very next routing decision avoid a provider that
+ * just refused, so they are written without a real observation behind them. Once a
+ * live probe succeeds the provider is demonstrably reachable again, and leaving the
+ * snapshot in place is actively harmful: the `rejected` window sits in
+ * `quota.json` at 100% used forever, and every time the 60s live cache goes cold —
+ * which is most of the time — the provider reads as exhausted and drops out of
+ * routing for a limit that expired days ago.
+ *
+ * Only a *successful* probe clears it. A failed one leaves the snapshot alone, so a
+ * genuinely spent provider keeps being skipped and keeps its reset time.
+ */
+function clearRejection(provider: string): void {
+  const current = headerQuotas();
+  const snapshot = current[provider];
+  if (!snapshot || !snapshot.windows.some((window) => window.status === "rejected")) return;
+  const next = { ...current };
+  delete next[provider];
+  saveHeaderQuotas(next);
+}
+
 export function anthropicWindowsFromHeaders(headers: Headers): QuotaWindow[] {
   const windows: QuotaWindow[] = [];
   const parse = (suffix: string): number | undefined => {
@@ -945,6 +968,8 @@ async function buildQuota(
   const live = await fetchLive(provider);
   const liveError = live && "error" in live ? live.error : undefined;
   if (live && !("error" in live) && (live.windows.length > 0 || live.balance)) {
+    // The probe answered, so any "this provider refused" snapshot on disk is stale.
+    clearRejection(provider.name);
     return {
       ...base,
       source: "live",
