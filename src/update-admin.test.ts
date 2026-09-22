@@ -23,6 +23,7 @@ it("keeps serving while the package installs, then drains before restart", async
     installation: { channel: "npm", command: "npm install --global jevonian@latest" },
     fetchLatest: async () => "0.0.2",
     install: async () => installWait,
+    readInstalledVersion: () => "0.0.2",
   });
   await updates.check({ force: true });
   const state: AppState = {

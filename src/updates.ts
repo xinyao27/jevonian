@@ -17,6 +17,8 @@ export type InstallChannel = "npm" | "pnpm" | "source" | "unknown";
 
 export interface Installation {
   channel: InstallChannel;
+  /** Absolute package-manager binary when known (avoids PATH shims like vite-plus `vp`). */
+  bin?: string;
   command?: string;
 }
 
@@ -43,6 +45,8 @@ interface UpdateManagerOptions {
   now?: () => number;
   fetchLatest?: () => Promise<string>;
   install?: (command: string) => Promise<void>;
+  /** Re-read on-disk package version after install (defaults to this build's package.json). */
+  readInstalledVersion?: () => string;
 }
 
 function resolveEntry(entry: string): string {
@@ -53,31 +57,64 @@ function resolveEntry(entry: string): string {
   }
 }
 
-export function detectInstallation(entry = process.argv[1] ?? ""): Installation {
+function shellQuote(value: string): string {
+  if (value.length === 0) return "''";
+  if (!/[^\w@%+=:,./-]/i.test(value)) return value;
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+/**
+ * Prefer the package manager next to the Node that is running this binary.
+ * PATH `npm` may be a shim (e.g. vite-plus `vp`) that installs into a different
+ * Node prefix than the one serving `jevonian` on PATH.
+ */
+export function resolvePackageManagerBin(
+  channel: "npm" | "pnpm",
+  execPath = process.execPath,
+): string | undefined {
+  const name =
+    process.platform === "win32" ? (channel === "npm" ? "npm.cmd" : "pnpm.cmd") : channel;
+  const adjacent = join(dirname(execPath), name);
+  return existsSync(adjacent) ? adjacent : undefined;
+}
+
+export function detectInstallation(
+  entry = process.argv[1] ?? "",
+  execPath = process.execPath,
+): Installation {
   const override = process.env.JEVONIAN_INSTALL_CHANNEL;
   if (override === "npm" || override === "pnpm") {
-    return { channel: override, command: installCommand(override) };
+    const bin = resolvePackageManagerBin(override, execPath);
+    return {
+      channel: override,
+      ...(bin ? { bin } : {}),
+      command: installCommand(override, { bin }),
+    };
   }
   if (override === "source" || override === "unknown") return { channel: override };
 
   const path = resolveEntry(entry).replaceAll("\\", "/");
   if (path.includes("/node_modules/.pnpm/") && path.includes("/node_modules/jevonian/")) {
-    return { channel: "pnpm", command: installCommand("pnpm") };
+    const bin = resolvePackageManagerBin("pnpm", execPath);
+    return { channel: "pnpm", ...(bin ? { bin } : {}), command: installCommand("pnpm", { bin }) };
   }
   if (path.includes("/node_modules/jevonian/")) {
-    return {
-      channel: path.includes("/pnpm/") || path.includes("/.pnpm/") ? "pnpm" : "npm",
-      command: installCommand(path.includes("/pnpm/") || path.includes("/.pnpm/") ? "pnpm" : "npm"),
-    };
+    const channel: "npm" | "pnpm" =
+      path.includes("/pnpm/") || path.includes("/.pnpm/") ? "pnpm" : "npm";
+    const bin = resolvePackageManagerBin(channel, execPath);
+    return { channel, ...(bin ? { bin } : {}), command: installCommand(channel, { bin }) };
   }
   if (/\/src\/cli\.(ts|js|mjs)$/.test(path)) return { channel: "source" };
   return { channel: "unknown" };
 }
 
-function installCommand(channel: "npm" | "pnpm"): string {
-  return channel === "pnpm"
-    ? `pnpm add --global ${PACKAGE_NAME}@latest`
-    : `npm install --global ${PACKAGE_NAME}@latest`;
+export function installCommand(
+  channel: "npm" | "pnpm",
+  options: { bin?: string; version?: string } = {},
+): string {
+  const spec = `${PACKAGE_NAME}@${options.version ?? "latest"}`;
+  const bin = shellQuote(options.bin ?? channel);
+  return channel === "pnpm" ? `${bin} add --global ${spec}` : `${bin} install --global ${spec}`;
 }
 
 function readPackageVersion(): string {
@@ -185,18 +222,20 @@ function spawnCommand(command: string): Promise<void> {
 }
 
 export class UpdateManager {
-  private readonly current: string;
+  private current: string;
   private readonly cachePath: string;
   private readonly installation: Installation;
   private readonly now: () => number;
   private readonly fetchLatest: () => Promise<string>;
   private readonly runInstall: (command: string) => Promise<void>;
+  private readonly readInstalledVersion: () => string;
   private latest?: string;
   private checkedAt?: string;
   private error?: string;
 
   constructor(options: UpdateManagerOptions) {
-    this.current = options.current ?? readPackageVersion();
+    this.readInstalledVersion = options.readInstalledVersion ?? readPackageVersion;
+    this.current = options.current ?? this.readInstalledVersion();
     this.cachePath = options.cachePath;
     this.installation = options.installation ?? detectInstallation();
     this.now = options.now ?? Date.now;
@@ -246,12 +285,17 @@ export class UpdateManager {
   }
 
   status(): UpdateStatus {
+    const installCmd =
+      this.installation.command ??
+      (this.installation.channel === "npm" || this.installation.channel === "pnpm"
+        ? installCommand(this.installation.channel, { bin: this.installation.bin })
+        : undefined);
     return {
       current: this.current,
       ...(this.latest ? { latest: this.latest } : {}),
       updateAvailable: this.latest ? isNewerVersion(this.latest, this.current) : false,
       channel: this.installation.channel,
-      ...(this.installation.command ? { installCommand: this.installation.command } : {}),
+      ...(installCmd ? { installCommand: installCmd } : {}),
       ...(this.checkedAt ? { checkedAt: this.checkedAt } : {}),
       ...(this.error ? { error: this.error } : {}),
     };
@@ -276,13 +320,31 @@ export class UpdateManager {
   async install(): Promise<UpdateStatus> {
     const status = await this.check({ force: true });
     if (status.error) throw new Error(`update check failed: ${status.error}`);
-    if (!status.updateAvailable) return status;
-    if (!this.installation.command) {
+    if (!status.updateAvailable || !status.latest) return status;
+    if (this.installation.channel !== "npm" && this.installation.channel !== "pnpm") {
       throw new Error(
         `cannot update a ${this.installation.channel} installation; install ${PACKAGE_NAME} from npm first`,
       );
     }
-    await this.runInstall(this.installation.command);
+    // Pin the registry version we just fetched. PATH `npm`/`@latest` can lag or
+    // (with shims) install into a different Node prefix than this binary.
+    const command = installCommand(this.installation.channel, {
+      bin: this.installation.bin,
+      version: status.latest,
+    });
+    await this.runInstall(command);
+    const installed = this.readInstalledVersion();
+    if (installed !== status.latest) {
+      throw new Error(
+        `installer finished but ${PACKAGE_NAME} is still ${installed} (expected ${status.latest}). ` +
+          `Tried: ${command}`,
+      );
+    }
+    this.current = installed;
+    this.latest = installed;
+    this.checkedAt = new Date(this.now()).toISOString();
+    this.error = undefined;
+    this.saveCache();
     return this.status();
   }
 }
