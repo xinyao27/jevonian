@@ -7,6 +7,7 @@ import {
   anthropicToChatStream,
   chatToAnthropic,
   chatToAnthropicMessage,
+  orderAnthropicToolResults,
 } from "./anthropic";
 import { resolveProviderAuth, withSessionAffinity } from "./auth";
 import { saveBody } from "./bodies";
@@ -19,6 +20,7 @@ import {
   normalizeTranscript,
   reductionRatio,
   reencodeMessages,
+  trimOversizedMessages,
   type CompactResult,
   type JevAsker,
   type JevResponse,
@@ -358,10 +360,13 @@ async function compactForOverflow(
 
   // Compaction asks its own questions, so it needs the raw System One shape rather than the
   // router's model-choice verdict.
+  // Routing calls stay on the configured timeout. Compaction sends a large state
+  // and needs longer than the default eight seconds.
+  const compactionBrain = { ...brain, timeoutMs: Math.max(brain.timeoutMs, 60_000) };
   const asker: JevAsker = {
     ask: async (state, questions) => {
       const { answers } = await askJevRaw(
-        brain,
+        compactionBrain,
         state as unknown as Record<string, unknown>,
         questions,
       );
@@ -660,15 +665,44 @@ async function forward(
       body = retryBody;
       decision = retry;
     } else {
-      return c.json(
-        {
-          error: {
-            message: `Context too large for every configured model, and compaction failed: ${compacted.error}`,
-            type: "context_length_exceeded",
+      const trimmed = trimOversizedMessages(body);
+      const shrunk = trimmed !== body;
+      if (shrunk) {
+        const retry = await decideRoute({
+          config,
+          body: trimmed,
+          headers: incomingHeaders,
+          store,
+          kind: clientKind,
+          requestId,
+          keyId,
+          keyName,
+        });
+        if (!("error" in retry) && !retry.contextOverflow) {
+          body = trimmed;
+          decision = retry;
+        } else {
+          return c.json(
+            {
+              error: {
+                message: `Context too large for every configured model, and compaction failed: ${compacted.error}`,
+                type: "context_length_exceeded",
+              },
+            },
+            400,
+          );
+        }
+      } else {
+        return c.json(
+          {
+            error: {
+              message: `Context too large for every configured model, and compaction failed: ${compacted.error}`,
+              type: "context_length_exceeded",
+            },
           },
-        },
-        400 as const,
-      );
+          400 as const,
+        );
+      }
     }
   }
 
@@ -805,6 +839,7 @@ async function forward(
     };
 
     let upstreamBody: Record<string, unknown> = bodyFor(upstreamKind);
+    if (upstreamKind === "anthropic") upstreamBody = orderAnthropicToolResults(upstreamBody);
     // OpenAI Responses rejects empty call_id / name (minLength 1) and call_id
     // longer than 64 chars. Sanitize before egress — Cursor / bridged history
     // can leave "" or oversized ids on function_call(_output) items.
