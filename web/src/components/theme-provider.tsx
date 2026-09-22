@@ -65,7 +65,9 @@ export function ThemeProvider({
     readStoredTheme(storageKey, defaultTheme),
   );
   const [resolvedTheme, setResolvedTheme] = React.useState<"dark" | "light">(() =>
-    typeof window === "undefined" ? "light" : applyThemeClass(readStoredTheme(storageKey, defaultTheme)),
+    typeof window === "undefined"
+      ? "light"
+      : applyThemeClass(readStoredTheme(storageKey, defaultTheme)),
   );
 
   React.useEffect(() => {

@@ -90,12 +90,16 @@ it("detects whether an installed plist already bakes PATH", () => {
 });
 
 it("recognises the transient launchctl bootstrap EIO message", () => {
-  expect(/Input\/output error|\bBootstrap failed:\s*5\b/i.test(
-    "Bootstrap failed: 5: Input/output error\nTry re-running the command as root for richer errors.",
-  )).toBe(true);
-  expect(/Input\/output error|\bBootstrap failed:\s*5\b/i.test("Bootstrap failed: 125: Domain does not support specified action")).toBe(
-    false,
-  );
+  expect(
+    /Input\/output error|\bBootstrap failed:\s*5\b/i.test(
+      "Bootstrap failed: 5: Input/output error\nTry re-running the command as root for richer errors.",
+    ),
+  ).toBe(true);
+  expect(
+    /Input\/output error|\bBootstrap failed:\s*5\b/i.test(
+      "Bootstrap failed: 125: Domain does not support specified action",
+    ),
+  ).toBe(false);
 });
 
 it("escapes XML special characters in plist paths", () => {

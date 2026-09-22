@@ -177,9 +177,7 @@ export function bootstrapService(plistPath = servicePlistPath()): void {
     if (!/Input\/output error|\bBootstrap failed:\s*5\b/i.test(detail)) break;
   }
   if (serviceStatus().loaded) return;
-  throw new Error(
-    `launchctl bootstrap failed: ${bootstrapDetail(last) || `exit ${last.status}`}`,
-  );
+  throw new Error(`launchctl bootstrap failed: ${bootstrapDetail(last) || `exit ${last.status}`}`);
 }
 
 function bootoutQuiet(): void {

@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.1.0] - 2026-09-22
+
+### Added
+
+- Dashboard light/dark/system theme switcher, with the preference remembered across reloads.
+
+### Changed
+
+- Dashboard UI primitives now use Base UI instead of Radix.
+
+### Fixed
+
+- LaunchAgent tunnel PATH now includes the user's interactive shell path, so ngrok/cloudflared stay reachable after a reboot.
+- LaunchAgent bootstrap no longer races on EIO when the previous agent is still shutting down.
+
 ## [0.0.3] - 2026-09-22
 
 ### Fixed
