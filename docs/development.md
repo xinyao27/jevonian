@@ -20,6 +20,7 @@ pnpm typecheck:web # type check the dashboard
 
 - `src/routing.ts` — phase classification, tier derivation, session store, virtual models
 - `src/upstream.ts` — request forwarding, streaming passthrough, usage capture, decision headers
+- `src/reasoning-passback.ts` — DeepSeek/Kimi `reasoning_content` capture and reinjection for tool turns
 - `src/oauth.ts` — Claude Code / Codex credential import, refresh, and cache
 - `src/responses.ts` — Responses protocol translation, streaming bridge, usage mapping
 - `src/gemini.ts` — Gemini/Cloud Code Assist translation (Antigravity), streaming bridge, usage mapping

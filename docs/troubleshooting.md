@@ -2,6 +2,12 @@
 
 Start with `jevonian doctor`. It checks config, providers, tiers, ledger, catalog, and pricing; add `--network` to include outbound reachability. Most symptoms below name what doctor cannot see.
 
+## `reasoning_content must be passed back to the API`
+
+DeepSeek (and Moonshot/Kimi) thinking mode requires every assistant turn's `reasoning_content` to be replayed whenever the request advertises `tools`. Cursor drops that field after the first tool call, which used to produce a hard `invalid_request_error` — and Cursor's error recovery can wipe the visible chat when it fires mid-agent loop.
+
+Jevonian caches `reasoning_content` from the upstream response and reinjects it on the next turn before the request leaves for DeepSeek/Kimi. If you still see the error, confirm the turn is going through Jevonian (check **Logs** for the provider) and that you are on a build that includes the passback fix. Restart the proxy after upgrading so the new code is loaded.
+
 ## The agent connects but every turn fails
 
 - **No brain configured.** `jevonian/auto` returns an error rather than guessing. Add a brain on the **Providers** page, or request a route explicitly with `jevonian/plan`.

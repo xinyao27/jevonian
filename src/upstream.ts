@@ -39,6 +39,12 @@ import { CLAUDE_CODE_SYSTEM_PROMPT, invalidateOAuthToken } from "./oauth";
 import { costOf, type Usage } from "./pricing";
 import { captureQuotaHeaders, captureUsageLimit } from "./quota";
 import {
+  needsReasoningPassback,
+  rememberFromChatCompletion,
+  repairReasoningContent,
+  reasoningCaptureTransform,
+} from "./reasoning-passback";
+import {
   chatCompletionFrom,
   chatResultFromResponse,
   chatToResponses,
@@ -804,6 +810,17 @@ async function forward(
     if (upstreamKind === "responses") {
       upstreamBody = ensureResponsesCallIds(upstreamBody);
     }
+    // DeepSeek / Kimi thinking mode: clients often drop `reasoning_content` after
+    // tool calls. Restore it from the previous upstream response before egress.
+    const passbackReasoning =
+      upstreamKind === "openai" &&
+      needsReasoningPassback(decision.provider, decision.model, provider.baseUrl);
+    if (passbackReasoning) {
+      upstreamBody = repairReasoningContent(upstreamBody, decision.session).body;
+    }
+    const passbackMessages = Array.isArray(upstreamBody.messages)
+      ? (upstreamBody.messages as Record<string, unknown>[])
+      : [];
 
     // The log reports the level the model was actually sent, read back from the body rather than
     // from the router's intent: those differ when the client set its own level. `gemini` takes no
@@ -1100,6 +1117,9 @@ async function forward(
 
     if (!upstreamStream && upstreamKind !== "responses") {
       const json = (await upstream.json()) as Record<string, unknown>;
+      if (passbackReasoning && clientKind === "openai") {
+        rememberFromChatCompletion(json, passbackMessages, decision.session);
+      }
       const usage = clientKind === "openai" ? openaiUsage(json.usage) : anthropicUsage(json.usage);
       const cost = costOf(decision.model, usage, new Date(), decision.provider);
       record(meta, 200, usage, cost.usd, cost.known);
@@ -1218,7 +1238,7 @@ async function forward(
       }
     };
 
-    const transform = new TransformStream<Uint8Array, Uint8Array>({
+    const usageTransform = new TransformStream<Uint8Array, Uint8Array>({
       transform(chunk, controller) {
         controller.enqueue(chunk);
         consume(decoder.decode(chunk, { stream: true }));
@@ -1230,7 +1250,13 @@ async function forward(
       },
     });
 
-    return new Response(upstream.body?.pipeThrough(transform) ?? null, {
+    let stream = upstream.body;
+    if (passbackReasoning && clientKind === "openai" && stream) {
+      stream = stream.pipeThrough(reasoningCaptureTransform(passbackMessages, decision.session));
+    }
+    stream = stream?.pipeThrough(usageTransform) ?? null;
+
+    return new Response(stream, {
       status: 200,
       headers: {
         "content-type": upstream.headers.get("content-type") ?? "text/event-stream",
