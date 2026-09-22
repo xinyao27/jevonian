@@ -58,6 +58,10 @@ Config lives at `~/.config/jevonian/config.json`. Everything in it is editable f
 
 Prefer editing `routings`; `tiers` is kept in sync for older callers.
 
+`models` is a fallback chain: the first model with a healthy provider serves the turn; later
+entries are tried only when earlier ones are unavailable. The Routing page reorders this list
+when you drag model rows.
+
 Each routing may also carry `providers`, a per-model allow-list of provider names in preference
 order:
 

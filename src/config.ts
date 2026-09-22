@@ -77,6 +77,7 @@ export interface RoutingEntry {
   id: string;
   label: string;
   description: string;
+  /** Fallback chain: first model with a healthy provider wins; later entries wait. */
   models: string[];
   /**
    * Which providers may serve each model within this routing, in preference order. The list is

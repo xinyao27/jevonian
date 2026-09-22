@@ -14,10 +14,11 @@ import {
   SortableContext,
   sortableKeyboardCoordinates,
   useSortable,
+  verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { GripVertical, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { RoutingSkeleton } from "@/components/page-skeletons";
 import { ProviderLogo } from "@/components/provider-logo";
@@ -442,6 +443,8 @@ function ProviderChips({
 
 function ModelRow({
   model,
+  rank,
+  showRank,
   providers,
   excluded,
   stale,
@@ -451,8 +454,11 @@ function ModelRow({
   onRemove,
   editableProviders,
   onChangeProviders,
+  dragHandle,
 }: {
   model: string;
+  rank?: number;
+  showRank?: boolean;
   providers: string[];
   excluded?: string[];
   stale?: string[];
@@ -462,23 +468,49 @@ function ModelRow({
   onRemove?: () => void;
   editableProviders?: boolean;
   onChangeProviders?: (next: string[]) => void;
+  /** When set, the row can be dragged to change fallback order within the routing. */
+  dragHandle?: {
+    attributes: ReturnType<typeof useSortable>["attributes"];
+    listeners: ReturnType<typeof useSortable>["listeners"];
+    setActivatorNodeRef: ReturnType<typeof useSortable>["setActivatorNodeRef"];
+  };
 }) {
   return (
     <div className="flex items-start justify-between gap-2 rounded-md border bg-background px-2 py-1.5">
-      <span className="flex min-w-0 flex-col gap-1">
-        <span className="truncate text-xs font-medium">{model}</span>
-        {catalogName ? (
-          <span className="truncate text-[10px] text-muted-foreground">{catalogName}</span>
+      <span className="flex min-w-0 flex-1 items-start gap-1.5">
+        {dragHandle ? (
+          <button
+            ref={dragHandle.setActivatorNodeRef}
+            type="button"
+            className="mt-0.5 cursor-grab touch-none text-muted-foreground hover:text-foreground active:cursor-grabbing"
+            aria-label={`Reorder ${model}`}
+            title="Drag to set model fallback order"
+            {...dragHandle.attributes}
+            {...dragHandle.listeners}
+          >
+            <GripVertical className="size-3.5" />
+          </button>
         ) : null}
-        <ProviderChips
-          providers={providers}
-          excluded={excluded}
-          stale={stale}
-          statuses={statuses}
-          officials={officials}
-          editable={editableProviders}
-          onChangeProviders={onChangeProviders}
-        />
+        {showRank && rank !== undefined ? (
+          <span className="mt-0.5 w-3 shrink-0 text-center tabular-nums text-[10px] font-medium text-muted-foreground">
+            {rank}
+          </span>
+        ) : null}
+        <span className="flex min-w-0 flex-1 flex-col gap-1">
+          <span className="truncate text-xs font-medium">{model}</span>
+          {catalogName ? (
+            <span className="truncate text-[10px] text-muted-foreground">{catalogName}</span>
+          ) : null}
+          <ProviderChips
+            providers={providers}
+            excluded={excluded}
+            stale={stale}
+            statuses={statuses}
+            officials={officials}
+            editable={editableProviders}
+            onChangeProviders={onChangeProviders}
+          />
+        </span>
       </span>
       {onRemove ? (
         <button
@@ -491,6 +523,130 @@ function ModelRow({
         </button>
       ) : null}
     </div>
+  );
+}
+
+function SortableModelRow({
+  model,
+  rank,
+  showRank,
+  ...rest
+}: {
+  model: string;
+  rank: number;
+  showRank: boolean;
+} & Omit<Parameters<typeof ModelRow>[0], "model" | "rank" | "showRank" | "dragHandle">) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: model });
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Translate.toString(transform),
+        transition,
+      }}
+      className={cn(isDragging && "z-10 opacity-40 shadow-md ring-1 ring-foreground/20")}
+    >
+      <ModelRow
+        model={model}
+        rank={rank}
+        showRank={showRank}
+        dragHandle={{ attributes, listeners, setActivatorNodeRef }}
+        {...rest}
+      />
+    </div>
+  );
+}
+
+/**
+ * Models in one routing, preferred-first. Dragging reorders the fallback chain: the first
+ * model with a healthy provider is used; later ones wait until earlier ones are unavailable.
+ */
+function ModelList({
+  models,
+  editable,
+  renderRow,
+  onReorder,
+}: {
+  models: string[];
+  editable: boolean;
+  renderRow: (model: string, index: number, draggable: boolean) => ReactNode;
+  onReorder?: (next: string[]) => void;
+}) {
+  const [items, setItems] = useState(models);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+
+  useEffect(() => {
+    setItems(models);
+  }, [models]);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  function moveActive(activeId: string, overId: string) {
+    setItems((current) => {
+      const from = current.indexOf(activeId);
+      const to = current.indexOf(overId);
+      if (from < 0 || to < 0 || from === to) return current;
+      return arrayMove(current, from, to);
+    });
+  }
+
+  function handleDragOver(event: DragOverEvent) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    moveActive(String(active.id), String(over.id));
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      moveActive(String(active.id), String(over.id));
+    }
+    queueMicrotask(() => {
+      const nextOrder = itemsRef.current;
+      if (!sameOrder(nextOrder, models)) onReorder?.(nextOrder);
+    });
+  }
+
+  function handleDragCancel() {
+    setItems(models);
+  }
+
+  const draggable = editable && items.length > 1 && Boolean(onReorder);
+
+  if (!draggable) {
+    return (
+      <div className="flex flex-col gap-1.5">
+        {items.map((model, index) => renderRow(model, index, false))}
+      </div>
+    );
+  }
+
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragOver={handleDragOver}
+      onDragEnd={handleDragEnd}
+      onDragCancel={handleDragCancel}
+    >
+      <SortableContext items={items} strategy={verticalListSortingStrategy}>
+        <div className="flex flex-col gap-1.5">
+          {items.map((model, index) => renderRow(model, index, true))}
+        </div>
+      </SortableContext>
+    </DndContext>
   );
 }
 
@@ -701,6 +857,12 @@ export function RoutingPage() {
     );
   }
 
+  function reorderModels(routingId: string, next: string[]) {
+    setDrafts((current) =>
+      current.map((entry) => (entry.id === routingId ? { ...entry, models: next } : entry)),
+    );
+  }
+
   /**
    * Save the provider allow-list for one model. A list matching discovery in order carries no
    * information, so it is dropped rather than stored — that keeps configs free of pins nobody
@@ -806,7 +968,7 @@ export function RoutingPage() {
         <p className="text-sm text-muted-foreground">
           Each card is a scenario Jev can choose. Open{" "}
           <span className="font-medium">Customize</span> on a card to edit its description, models,
-          and provider preference order. Changes save when you click{" "}
+          model fallback order, and provider preference. Changes save when you click{" "}
           <span className="font-medium">Done</span>.
         </p>
       </div>
@@ -817,8 +979,8 @@ export function RoutingPage() {
             <CardTitle>Model routing</CardTitle>
             <CardDescription>
               {guard.enabled
-                ? "Healthy providers win first; within a routing, drag providers so your preferred reseller is tried earlier."
-                : "Quota guard is off — providers run in the order you set under each model."}
+                ? "Healthy providers win first. Drag models within a routing for fallback order; drag providers under a model so your preferred reseller is tried earlier."
+                : "Drag models within a routing for fallback order; drag providers under a model for reseller preference."}
             </CardDescription>
           </div>
           <Button
@@ -980,9 +1142,13 @@ export function RoutingPage() {
                       <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                         Models
                       </span>
-                      {expanded && routing.models.length > 0 ? (
+                      {expanded && routing.models.length > 1 ? (
                         <span className="text-[10px] text-muted-foreground">
-                          Grip = order, × = stop using
+                          Drag models = fallback order
+                        </span>
+                      ) : expanded && routing.models.length > 0 ? (
+                        <span className="text-[10px] text-muted-foreground">
+                          × = stop using
                         </span>
                       ) : null}
                     </div>
@@ -998,38 +1164,61 @@ export function RoutingPage() {
                             Auto — derived from the price table
                           </span>
                         ) : null}
-                        {modelList.map((model) => {
-                          const discovered = providersByModel.get(model) ?? [];
-                          const allow = routing.providers?.[model];
-                          const editable = expanded && routing.models.includes(model);
-                          return (
-                            <ModelRow
-                              key={model}
-                              model={model}
-                              providers={allowedProviders(discovered, allow)}
-                              excluded={
-                                editable && allow
+                        <ModelList
+                          models={modelList}
+                          editable={expanded}
+                          onReorder={
+                            expanded ? (next) => reorderModels(routing.id, next) : undefined
+                          }
+                          renderRow={(model, index, draggable) => {
+                            const discovered = providersByModel.get(model) ?? [];
+                            const allow = routing.providers?.[model];
+                            const editableProviders = expanded && routing.models.includes(model);
+                            const showRank = modelList.length > 1;
+                            const rowProps = {
+                              providers: allowedProviders(discovered, allow),
+                              excluded:
+                                editableProviders && allow
                                   ? discovered.filter((provider) => !allow.includes(provider))
-                                  : undefined
-                              }
-                              stale={
-                                editable && allow
+                                  : undefined,
+                              stale:
+                                editableProviders && allow
                                   ? allow.filter((provider) => !discovered.includes(provider))
-                                  : undefined
-                              }
-                              statuses={statusByProvider}
-                              officials={officialsByModel.get(model)}
-                              catalogName={catalogNames.get(model)}
-                              onRemove={expanded ? () => removeModel(routing.id, model) : undefined}
-                              editableProviders={editable}
-                              onChangeProviders={
-                                editable
-                                  ? (next) => setModelProviders(routing.id, model, next)
-                                  : undefined
-                              }
-                            />
-                          );
-                        })}
+                                  : undefined,
+                              statuses: statusByProvider,
+                              officials: officialsByModel.get(model),
+                              catalogName: catalogNames.get(model),
+                              onRemove: expanded
+                                ? () => removeModel(routing.id, model)
+                                : undefined,
+                              editableProviders,
+                              onChangeProviders: editableProviders
+                                ? (next: string[]) =>
+                                    setModelProviders(routing.id, model, next)
+                                : undefined,
+                            };
+                            if (draggable) {
+                              return (
+                                <SortableModelRow
+                                  key={model}
+                                  model={model}
+                                  rank={index + 1}
+                                  showRank={showRank}
+                                  {...rowProps}
+                                />
+                              );
+                            }
+                            return (
+                              <ModelRow
+                                key={model}
+                                model={model}
+                                rank={index + 1}
+                                showRank={showRank}
+                                {...rowProps}
+                              />
+                            );
+                          }}
+                        />
                       </>
                     )}
                   </div>
