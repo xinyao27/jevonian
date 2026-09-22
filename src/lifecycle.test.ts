@@ -8,9 +8,12 @@ it("rejects new requests while draining and waits for active work", async () => 
   const release = lifecycle.beginRequest();
   let restarted = false;
 
-  const restart = lifecycle.restartAfterDrain(async () => {
-    restarted = true;
-  });
+  const restart = lifecycle.restartAfterDrain(
+    async () => {
+      restarted = true;
+    },
+    { timeoutMs: 5_000 },
+  );
   expect(lifecycle.draining).toBe(true);
   await Promise.resolve();
   expect(restarted).toBe(false);
@@ -29,6 +32,52 @@ it("starts a restart immediately when no requests are active", async () => {
   expect(restarted).toBe(true);
 });
 
+it("forces restart after the drain timeout while requests are still active", async () => {
+  const lifecycle = new ServerLifecycle();
+  lifecycle.beginRequest();
+  let restarted = false;
+  const warn = console.warn;
+  const warnings: unknown[][] = [];
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args);
+  };
+  try {
+    const restart = lifecycle.restartAfterDrain(
+      () => {
+        restarted = true;
+      },
+      { timeoutMs: 30 },
+    );
+    expect(lifecycle.draining).toBe(true);
+    await Promise.resolve();
+    expect(restarted).toBe(false);
+    await restart;
+    expect(restarted).toBe(true);
+    expect(warnings.some((args) => String(args[0]).includes("forcing restart"))).toBe(true);
+  } finally {
+    console.warn = warn;
+  }
+});
+
+it("cancels tracked streams when the drain timeout fires", async () => {
+  const lifecycle = new ServerLifecycle();
+  const release = lifecycle.beginRequest();
+  // Never-ending upstream body — the hang that used to block updates forever.
+  const hanging = new ReadableStream<Uint8Array>({
+    pull() {
+      /* intentionally never enqueue or close */
+    },
+  });
+  const tracked = lifecycle.trackResponse(new Response(hanging), release);
+  const reader = tracked.body!.getReader();
+  const read = reader.read();
+
+  await lifecycle.restartAfterDrain(() => {}, { timeoutMs: 30 });
+
+  // Cancel may close cleanly or error the pending read; either way the slot releases.
+  await Promise.allSettled([read]);
+  expect(lifecycle.activeRequests).toBe(0);
+});
 it("only releases a request once when a response is consumed or cancelled", async () => {
   const lifecycle = new ServerLifecycle();
   const release = lifecycle.beginRequest();

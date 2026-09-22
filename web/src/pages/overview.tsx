@@ -394,7 +394,7 @@ export function OverviewPage() {
           <CardTitle>Jevonian updates</CardTitle>
           <CardDescription>
             Installed through the package manager that owns this copy. New requests pause only for
-            the final restart; active streams finish first.
+            the final restart; active streams finish first, or are cancelled after 60s if stuck.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap items-center gap-3">
