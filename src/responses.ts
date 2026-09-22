@@ -30,12 +30,22 @@ function syntheticCallId(): string {
 }
 
 /**
- * Map oversized ids to a stable short form so function_call / function_call_output
- * pairs still match after clamp. Bridged clients (Cursor / Codex / non-OpenAI
- * backends) can emit ids past the Responses 64-char max.
+ * Map oversized / corrupted ids to a stable short form so function_call /
+ * function_call_output pairs still match after clamp. Bridged clients
+ * (Cursor / Codex / non-OpenAI backends) can emit ids past the Responses
+ * 64-char max, or concatenate two ids with a newline (still rejected).
  */
 function clampCallId(id: string): string {
-  if (id.length <= MAX_CALL_ID_LENGTH) return id;
+  // Prefer a single short line when the client glued two ids together.
+  const lines = id
+    .split(/[\r\n]+/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+  const candidate =
+    lines.length > 1
+      ? (lines.find((part) => part.length <= MAX_CALL_ID_LENGTH) ?? lines[0]!)
+      : (lines[0] ?? id.trim());
+  if (candidate.length > 0 && candidate.length <= MAX_CALL_ID_LENGTH) return candidate;
   const hash = createHash("sha256").update(id, "utf8").digest("hex").slice(0, 24);
   return `call_${hash}`;
 }

@@ -261,6 +261,23 @@ describe("ensureResponsesCallIds", () => {
     expect(input[1]?.call_id).toBe(callId);
   });
 
+  it("splits newline-glued call_ids to the short first segment", () => {
+    const longId =
+      "call-a627c24a-c58f-430e-a8e9-17999e8c4178-10\nfc_648db95d-2895-9d22-b9b6-4e975dc82a58_3";
+    expect(longId.length).toBe(86);
+    const body = ensureResponsesCallIds({
+      model: "gpt-5.6-codex",
+      input: [
+        { type: "function_call", call_id: longId, name: "edit", arguments: "{}" },
+        { type: "function_call_output", call_id: longId, output: "ok" },
+      ],
+    });
+    const input = body.input as Array<Record<string, unknown>>;
+    expect(input[0]?.call_id).toBe("call-a627c24a-c58f-430e-a8e9-17999e8c4178-10");
+    expect(String(input[0]?.call_id).length).toBeLessThanOrEqual(64);
+    expect(input[1]?.call_id).toBe(input[0]?.call_id);
+  });
+
   it("maps the same oversized id to the same short id across items", () => {
     const longId = `fc_${"x".repeat(86)}`;
     const body = ensureResponsesCallIds({
