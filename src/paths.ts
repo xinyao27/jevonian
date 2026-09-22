@@ -44,3 +44,8 @@ export function serveLogPath(): string {
   if (process.env.JEVONIAN_SERVE_LOG) return process.env.JEVONIAN_SERVE_LOG;
   return join(dataDir(), "serve.log");
 }
+
+export function leaderboardPath(): string {
+  if (process.env.JEVONIAN_LEADERBOARD) return process.env.JEVONIAN_LEADERBOARD;
+  return join(dataDir(), "leaderboard.json");
+}

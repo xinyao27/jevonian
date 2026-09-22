@@ -8,6 +8,9 @@ import { typeFromNpm } from "./providers";
 
 export const MODELS_DEV_URL = process.env.JEVONIAN_MODELS_DEV_URL ?? "https://models.dev/api.json";
 
+/** How long a pricing snapshot stays fresh before the next background fetch. */
+export const PRICING_CACHE_TTL_MS = 12 * 60 * 60 * 1_000;
+
 export const OFFICIAL_PROVIDERS = new Set([
   "alibaba",
   "anthropic",
@@ -301,6 +304,27 @@ export function loadPricingSnapshot(): Record<string, ModelPrice> | null {
   return snapshot.models as Record<string, ModelPrice>;
 }
 
+/** True when a local pricing snapshot exists and was fetched within the TTL. */
+export function isPricingFresh(now = Date.now()): boolean {
+  const path = pricingPath();
+  if (!existsSync(path)) return false;
+  try {
+    const snapshot = loadSnapshotFile();
+    const fetchedAt = typeof snapshot.fetchedAt === "string" ? Date.parse(snapshot.fetchedAt) : NaN;
+    if (Number.isFinite(fetchedAt)) return now - fetchedAt < PRICING_CACHE_TTL_MS;
+    // Older files without fetchedAt: fall back to mtime so a just-written cache still counts.
+    const stat = statSync(path);
+    return now - stat.mtimeMs < PRICING_CACHE_TTL_MS;
+  } catch {
+    return false;
+  }
+}
+
+export function pricingFetchedAt(): string | undefined {
+  const snapshot = loadSnapshotFile();
+  return typeof snapshot.fetchedAt === "string" ? snapshot.fetchedAt : undefined;
+}
+
 export function loadProviderMeta(): Record<string, ProviderMeta> {
   return (loadSnapshotFile().providers ?? {}) as Record<string, ProviderMeta>;
 }
@@ -335,14 +359,29 @@ export function savePricingSnapshot(
   return snapshot;
 }
 
-export async function refreshPricing(): Promise<{
+export async function refreshPricing(options: { force?: boolean } = {}): Promise<{
   models: number;
   providers: number;
   capabilities: number;
   identities: number;
   fetchedAt: string;
   source: string;
+  cached: boolean;
 }> {
+  if (!options.force && isPricingFresh()) {
+    const snapshot = loadSnapshotFile();
+    const models = (snapshot.models ?? {}) as Record<string, ModelPrice>;
+    return {
+      models: Object.keys(models).length,
+      providers: Object.keys((snapshot.providers ?? {}) as object).length,
+      capabilities: Object.keys((snapshot.capabilities ?? {}) as object).length,
+      identities: Object.keys((snapshot.identities ?? {}) as object).length,
+      fetchedAt: typeof snapshot.fetchedAt === "string" ? snapshot.fetchedAt : "",
+      source: typeof snapshot.source === "string" ? snapshot.source : MODELS_DEV_URL,
+      cached: true,
+    };
+  }
+
   const response = await fetch(MODELS_DEV_URL);
   if (!response.ok) throw new Error(`models.dev responded with HTTP ${response.status}`);
   const payload = await response.json();
@@ -358,5 +397,6 @@ export async function refreshPricing(): Promise<{
     identities: Object.keys(identities).length,
     fetchedAt: snapshot.fetchedAt,
     source: snapshot.source,
+    cached: false,
   };
 }

@@ -103,13 +103,15 @@ dropped rather than stored. The older name for this field, `providerOrder`, stil
 
 ## Data locations
 
-| Path                                   | Contents                                              |
-| -------------------------------------- | ----------------------------------------------------- |
-| `~/.config/jevonian/config.json`       | routing, providers, tiers, brains                     |
-| `~/.config/jevonian/credentials.json`  | provider and brain keys (`0600`)                      |
-| `~/.local/share/jevonian/ledger.jsonl` | append-only request and brain-call ledger             |
-| `~/.local/share/jevonian/keys.json`    | Jevonian API keys (`sk-jev-…`), hashed                |
-| `~/.local/share/jevonian/pricing.json` | models.dev price snapshot                             |
-| `~/.local/share/jevonian/quota.json`   | quota windows captured from headers and endpoints     |
-| `~/.local/share/jevonian/bodies/`      | captured request/brain payloads (`0600`, newest 1000) |
-| `~/.local/share/jevonian/clients/`     | pre-Jevonian client state, for **Restore**            |
+| Path                                       | Contents                                                                   |
+| ------------------------------------------ | -------------------------------------------------------------------------- |
+| `~/.config/jevonian/config.json`           | routing, providers, tiers, brains                                          |
+| `~/.config/jevonian/credentials.json`      | provider and brain keys (`0600`)                                           |
+| `~/.local/share/jevonian/ledger.jsonl`     | append-only request and brain-call ledger                                  |
+| `~/.local/share/jevonian/keys.json`        | Jevonian API keys (`sk-jev-…`), hashed                                     |
+| `~/.local/share/jevonian/pricing.json`     | models.dev price snapshot (refreshed every 12h, or via `jevonian refresh`) |
+| `~/.local/share/jevonian/leaderboard.json` | models.dev unified-model benchmark snapshot (`models.json`; 12h TTL)       |
+
+| `~/.local/share/jevonian/quota.json` | quota windows captured from headers and endpoints |
+| `~/.local/share/jevonian/bodies/` | captured request/brain payloads (`0600`, newest 1000) |
+| `~/.local/share/jevonian/clients/` | pre-Jevonian client state, for **Restore** |

@@ -7,6 +7,7 @@ import { computeActivityReport } from "./activity";
 import { loadBody } from "./bodies";
 import { askJev, brainCredentialName, findJevChannel, JEV_CHANNELS } from "./brain";
 import { discoverProviderModels } from "./catalog";
+import { catalogStatus, refreshCatalogCaches } from "./catalog-sync";
 import {
   applyClient,
   clientTargets,
@@ -831,6 +832,14 @@ export function createAdminApp(state: AppState): Hono {
       };
     }
     return c.json({ provider, prices });
+  });
+
+  app.get("/catalog", (c) => c.json(catalogStatus()));
+
+  app.post("/catalog/refresh", async (c) => {
+    const result = await refreshCatalogCaches({ force: true });
+    initPricing();
+    return c.json({ ...result, status: catalogStatus() });
   });
 
   app.get("/keys", (c) => c.json({ keys: listKeysWithUsage() }));

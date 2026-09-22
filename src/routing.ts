@@ -21,6 +21,7 @@ import {
   type RoutingEntry,
   type RoutingTiers,
 } from "./config";
+import { benchmarkFocusFor, benchmarksCoverageOf, leaderboardViewFor } from "./leaderboard";
 import { appendRecord } from "./ledger";
 import { canonicalVariants } from "./models";
 import { costOf, isDeepSeekPeak, priceFor, type Usage } from "./pricing";
@@ -1504,6 +1505,21 @@ export async function decideRoute(
 
   const goal = sessionGoal(body, kind);
   const lastAssistant = assistantMessages(body, kind).at(-1)?.replace(/\s+/g, " ").trim() ?? "";
+  const benchmarkFocus = benchmarkFocusFor({
+    consecutiveFailures: signals.consecutiveFailures,
+    hasToolResults: signals.hasToolResults,
+    hasTools: signals.hasTools,
+  });
+
+  const firstModelViews = offers.map((offer) => {
+    const first = offer.offeredToBrain[0];
+    return first ? leaderboardViewFor(first.model) : undefined;
+  });
+  const benchmarksCoverage = benchmarksCoverageOf(firstModelViews);
+  // Soft evidence only. When nobody has scores, omit focus entirely so Jev cannot
+  // treat "missing benchmarks" as a reason to reject a routing.
+  const includeBenchmarkHints = benchmarksCoverage !== "none";
+
   const brainState = {
     last_user_message: lastUserMessage(body, kind),
     ...(lastAssistant ? { last_assistant_message: lastAssistant.slice(0, 500) } : {}),
@@ -1517,6 +1533,9 @@ export async function decideRoute(
     ...(previous ? { previous_model: previous.model, previous_routing: previous.phase } : {}),
     session_turns: turns,
     message_count: messageCount(body),
+    ...(includeBenchmarkHints
+      ? { benchmark_focus: benchmarkFocus, benchmarks_coverage: benchmarksCoverage }
+      : {}),
     ...constraints,
   };
 
@@ -1527,16 +1546,34 @@ export async function decideRoute(
     reason = `brain:${verdict.model ?? "unset"}`;
   };
 
-  const routingPayload = offers.map((offer) => ({
-    id: offer.id,
-    label: offer.label,
-    description: offer.description,
-    // Listed preferred-first so Jev can weigh order; preference_rank makes that explicit.
-    models: offer.offeredToBrain.map((candidate, index) => ({
-      ...candidate,
-      preference_rank: index + 1,
-    })),
-  }));
+  const routingPayload = offers.map((offer) => {
+    const focus = includeBenchmarkHints
+      ? benchmarkFocusFor({
+          consecutiveFailures: signals.consecutiveFailures,
+          hasToolResults: signals.hasToolResults,
+          hasTools: signals.hasTools,
+          routingId: offer.id,
+        })
+      : undefined;
+    return {
+      id: offer.id,
+      label: offer.label,
+      description: offer.description,
+      ...(focus ? { benchmark_focus: focus } : {}),
+      // Listed preferred-first so Jev can weigh order; preference_rank makes that explicit.
+      // Benchmark scores only attach to the first model — that is the one this routing would
+      // actually serve. Scores on fallbacks would mislead the brain into picking a routing
+      // for a model it will never run. Missing benchmarks are omitted, never a zero score.
+      models: offer.offeredToBrain.map((candidate, index) => {
+        const benchmarks = index === 0 ? leaderboardViewFor(candidate.model) : undefined;
+        return {
+          ...candidate,
+          preference_rank: index + 1,
+          ...(benchmarks ? { benchmarks } : {}),
+        };
+      }),
+    };
+  });
 
   const wantsTranscript = brains.some((entry) => entry.fullPrompt === true);
   const transcript = wantsTranscript ? fullTranscript(body, kind) : undefined;

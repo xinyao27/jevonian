@@ -30,7 +30,9 @@ pnpm typecheck:web # type check the dashboard
 - `src/keys.ts` — Jevonian API keys (`sk-jev-…`), hashed at `~/.local/share/jevonian/keys.json`
 - `src/stats.ts` — ledger aggregation for reports and the dashboard
 - `src/catalog.ts` — provider model discovery and cache
-- `src/modelsdev.ts` — models.dev price table fetch, mapping, and snapshot cache
+- `src/modelsdev.ts` — models.dev price table fetch, mapping, and snapshot cache (12h TTL)
+- `src/leaderboard.ts` — models.dev `models.json` benchmark snapshot, lookup by unified id / label
+- `src/catalog-sync.ts` — shared 12h refresh for pricing + benchmarks (serve background poll + manual)
 - `src/providers.ts` — built-in provider presets and protocol-type mapping
 - `src/credentials.ts` — owner-only key store at `~/.config/jevonian/credentials.json`
 - `src/prompt.ts` — interactive prompts (masked key entry, choices)

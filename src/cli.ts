@@ -7,6 +7,7 @@ import type { AppState } from "./admin";
 import { brainCredentialName, findJevChannel } from "./brain";
 import { openBrowserOnce } from "./browser";
 import { catalogPath, discoverProviderModels, loadCatalog, refreshCatalog } from "./catalog";
+import { catalogStatus, refreshCatalogCaches, scheduleCatalogSync } from "./catalog-sync";
 import {
   apiKeySource,
   loadConfig,
@@ -24,7 +25,7 @@ import { credentialsPath, getCredential, removeCredential, setCredential } from 
 import { readRecords, type LedgerRecord } from "./ledger";
 import { ServerLifecycle } from "./lifecycle";
 import { canonicalVariants, identityGaps } from "./models";
-import { loadProviderMeta, loadPricingSnapshot, refreshPricing } from "./modelsdev";
+import { loadProviderMeta, loadPricingSnapshot } from "./modelsdev";
 import type { OAuthSource } from "./oauth";
 import {
   browserStatePath,
@@ -414,12 +415,45 @@ async function models(refresh: boolean): Promise<void> {
 
 async function pricing(refresh: boolean): Promise<void> {
   if (refresh) {
-    console.log("fetching models.dev/api.json...");
-    const result = await refreshPricing();
-    console.log(`saved ${result.models} models from ${result.source} at ${result.fetchedAt}`);
+    console.log("fetching models.dev pricing + benchmarks...");
+    const result = await refreshCatalogCaches({ force: true });
+    if (result.pricing.error) {
+      console.log(`pricing: failed (${result.pricing.error})`);
+    } else {
+      console.log(
+        `pricing: ${result.pricing.cached ? "cached" : "saved"} ${result.pricing.models} models from ${result.pricing.source} at ${result.pricing.fetchedAt}`,
+      );
+    }
+    if (result.leaderboard.error) {
+      console.log(`leaderboard: failed (${result.leaderboard.error})`);
+    } else {
+      console.log(
+        `leaderboard: ${result.leaderboard.cached ? "cached" : "saved"} ${result.leaderboard.models} models (${result.leaderboard.boards} boards) at ${result.leaderboard.fetchedAt}`,
+      );
+    }
   }
   const info = initPricing();
   console.log(`pricing source: ${info.source} (${info.models} models)`);
+  const status = catalogStatus();
+  console.log(
+    `leaderboard: ${status.leaderboard.present ? `fresh=${status.leaderboard.fresh} models=${status.leaderboard.models} boards=${status.leaderboard.boards.length} fetchedAt=${status.leaderboard.fetchedAt ?? "unknown"}` : "missing (run jevonian refresh)"}`,
+  );
+}
+
+async function refreshCommand(): Promise<void> {
+  console.log("refreshing catalog (models.dev pricing + benchmarks)…");
+  const result = await refreshCatalogCaches({ force: true });
+  if (result.pricing.error) console.log(`pricing: failed (${result.pricing.error})`);
+  else
+    console.log(
+      `pricing: saved ${result.pricing.models} models from ${result.pricing.source} at ${result.pricing.fetchedAt}`,
+    );
+  if (result.leaderboard.error) console.log(`leaderboard: failed (${result.leaderboard.error})`);
+  else
+    console.log(
+      `leaderboard: saved ${result.leaderboard.models} models (${result.leaderboard.boards} boards) at ${result.leaderboard.fetchedAt}`,
+    );
+  initPricing();
 }
 
 function ensureConfig(): Config {
@@ -450,8 +484,13 @@ async function addProvider(): Promise<void> {
   if (!loadPricingSnapshot() && interactive) {
     if (await askYesNo("Fetch model prices from models.dev now? (recommended)", true)) {
       try {
-        const result = await refreshPricing();
-        console.log(`pricing: ${result.models} models from ${result.source}`);
+        const result = await refreshCatalogCaches({ force: true });
+        console.log(`pricing: ${result.pricing.models} models from ${result.pricing.source}`);
+        if (!result.leaderboard.error) {
+          console.log(
+            `leaderboard: ${result.leaderboard.models} models (${result.leaderboard.boards} boards)`,
+          );
+        }
       } catch (error) {
         console.log(`pricing fetch failed: ${String(error)}`);
       }
@@ -898,6 +937,8 @@ async function main(): Promise<void> {
     await models("refresh" in flags);
   } else if (command === "pricing") {
     await pricing("refresh" in flags);
+  } else if (command === "refresh") {
+    await refreshCommand();
   } else if (command === "quota") {
     await quota("refresh" in flags);
   } else if (command === "update") {
@@ -932,16 +973,9 @@ async function main(): Promise<void> {
       console.log(`  http://${config.listen.host}:${config.listen.port}/providers`);
     }
     const pricingInfo = initPricing();
-    if (!loadPricingSnapshot()) {
-      void refreshPricing()
-        .then((result) => {
-          initPricing();
-          console.log(`pricing: fetched ${result.models} models from models.dev`);
-        })
-        .catch((error) => {
-          console.log(`pricing fetch failed: ${formatFetchError(error)}`);
-        });
-    }
+    // Local snapshots are authoritative. Refresh in the background only when missing or
+    // older than 12h; otherwise keep serving disk data until a manual refresh.
+    scheduleCatalogSync({ log: (message) => console.log(message) });
     // A flaky local proxy (Clash et al.) can drop sockets outside any await; keep
     // serve up and log once instead of dumping TypeError: terminated and exiting.
     process.on("unhandledRejection", (reason) => {
@@ -1098,7 +1132,7 @@ async function main(): Promise<void> {
     );
   } else {
     console.log(
-      "Usage: jevonian [serve|stop|status|add|providers|remove|report|doctor|models|pricing|quota|update|launch|init]",
+      "Usage: jevonian [serve|stop|status|add|providers|remove|report|doctor|models|pricing|refresh|quota|update|launch|init]",
     );
     process.exit(1);
   }

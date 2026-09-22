@@ -518,6 +518,47 @@ export const api = {
     request<{ provider: string; prices: Record<string, PriceInfo> }>(
       `/api/pricing?provider=${encodeURIComponent(provider)}`,
     ),
+  catalog: () =>
+    request<{
+      pricing: { present: boolean; fresh: boolean; fetchedAt?: string; ttlMs: number };
+      leaderboard: {
+        present: boolean;
+        fresh: boolean;
+        fetchedAt?: string;
+        boards: string[];
+        models: number;
+        ttlMs: number;
+      };
+    }>("/api/catalog"),
+  refreshCatalog: () =>
+    request<{
+      pricing: {
+        models: number;
+        fetchedAt: string;
+        source: string;
+        cached: boolean;
+        error?: string;
+      };
+      leaderboard: {
+        boards: number;
+        models: number;
+        fetchedAt: string;
+        source: string;
+        cached: boolean;
+        error?: string;
+      };
+      status: {
+        pricing: { present: boolean; fresh: boolean; fetchedAt?: string; ttlMs: number };
+        leaderboard: {
+          present: boolean;
+          fresh: boolean;
+          fetchedAt?: string;
+          boards: string[];
+          models: number;
+          ttlMs: number;
+        };
+      };
+    }>("/api/catalog/refresh", { method: "POST" }),
   stats: () => request<StatsResponse>("/api/stats"),
   update: () => request<UpdateResponse>("/api/update"),
   checkUpdate: () => request<UpdateResponse>("/api/update/check", { method: "POST" }),
