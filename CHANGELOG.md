@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+### Added
+
+- Transient upstream failures are retried instead of failing the turn: a dropped socket, a DNS blip, or a gateway `500`/`502`/`503`/`504` during the model call is repeated up to twice (`250ms`→`500ms` with jitter). The routing brain call and OAuth token refreshes retry the same way, so one flaky link no longer costs a whole turn before a model is even asked. A recovered turn records `retries` in the ledger, returns `x-jevonian-retries`, and shows **network retries** in the log detail. Tune with `JEVONIAN_UPSTREAM_RETRIES` (`0` disables, capped at `5`). A `429` still goes to quota failover rather than being repeated against the same host, and a `4xx` is never retried.
+
 ## [0.1.5] - 2026-09-23
 
 ### Added

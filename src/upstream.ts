@@ -65,6 +65,15 @@ import {
   splitSseEvents,
 } from "./responses";
 import {
+  configuredRetries,
+  describeFailure,
+  describeFetchError,
+  retryTransient,
+  withRetry,
+  type RetryAttempt,
+  type RetryFailure,
+} from "./retry";
+import {
   decideRoute,
   isDesktopRoutedModel,
   phaseOfModel,
@@ -102,6 +111,8 @@ interface RequestMeta {
   skipped?: RouteSkip[];
   keyId?: string;
   keyName?: string;
+  /** Transient upstream failures that were retried before this turn was recorded. */
+  retries?: number;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -304,6 +315,7 @@ function record(
     ...(meta.effort ? { effort: meta.effort } : {}),
     ...(meta.effortNote ? { effortNote: meta.effortNote } : {}),
     ...(meta.skipped && meta.skipped.length > 0 ? { skipped: meta.skipped } : {}),
+    ...(meta.retries ? { retries: meta.retries } : {}),
     ...(error ? { error } : {}),
   });
 }
@@ -342,13 +354,15 @@ function decisionMeta(
   };
 }
 
-function decisionHeaders(decision: RouteDecision): Record<string, string> {
+function decisionHeaders(decision: RouteDecision, retries = 0): Record<string, string> {
   return {
     "x-jevonian-model": decision.model,
     "x-jevonian-provider": decision.provider,
     "x-jevonian-phase": decision.phase,
     "x-jevonian-session": decision.session,
     "x-jevonian-reason": decision.reason,
+    // Reported only when the turn needed one, so a healthy response stays uncluttered.
+    ...(retries > 0 ? { "x-jevonian-retries": String(retries) } : {}),
     ...(decision.cache ? { "x-jevonian-cache-state": decision.cache.state } : {}),
     ...(decision.brain ? { "x-jevonian-brain": decision.brain } : {}),
     ...(decision.brainChannel ? { "x-jevonian-brain-channel": decision.brainChannel } : {}),
@@ -374,22 +388,37 @@ function errorResponse(c: Context, meta: RequestMeta, status: number, message: s
   return c.json({ error: { message, type: "jevonian_error" } }, status as 400);
 }
 
+/** One line describing why an upstream attempt is being repeated. */
+function describeRetryFailure(failure: RetryFailure): string {
+  return describeFailure(failure);
+}
+
 /**
- * Describes a failed upstream call.
+ * POSTs an outgoing body, repeating the call while the failure looks transient.
  *
- * Node's fetch reports every transport problem as a bare "TypeError: fetch failed" and
- * buries the reason — DNS, a refused connection, a proxy that will not tunnel — in
- * `cause`. Without it a failed turn says nothing about what to fix.
+ * A non-ok body is read as part of the attempt rather than by the caller: an unread body holds
+ * the pooled socket the next attempt wants, and reading it here means a retried 502 leaves
+ * nothing behind. An ok body is left untouched, because it may be an SSE stream.
  */
-export function describeFetchError(error: unknown): string {
-  const parts: string[] = [];
-  let current: unknown = error;
-  while (current instanceof Error && parts.length < 5) {
-    const code = (current as { code?: unknown }).code;
-    parts.push(typeof code === "string" ? `${current.message} [${code}]` : current.message);
-    current = (current as { cause?: unknown }).cause;
-  }
-  return parts.length === 0 ? String(error) : parts.join(" caused by ");
+async function postUpstream(
+  url: string,
+  init: RequestInit,
+  onRetry: (info: RetryAttempt) => void,
+): Promise<{ response: Response; text: string }> {
+  const retryBudget = configuredRetries();
+  return withRetry(
+    async () => {
+      const response = await fetch(url, init);
+      return { response, text: response.ok ? "" : await response.text() };
+    },
+    {
+      attempts: retryBudget + 1,
+      // Only a "the server could not answer" status is repeated here. A 429 is a verdict about
+      // quota and belongs to the failover path, which knows how to route the turn elsewhere.
+      retryWhen: ({ response }) => retryTransient(response),
+      onRetry,
+    },
+  );
 }
 
 /** The result of trying to shrink a body that no configured model could hold. */
@@ -1039,16 +1068,31 @@ async function forward(
         ? applyClaudeCodeSystem(payload)
         : payload;
     };
-    const send = (): Promise<Response> =>
-      fetch(urlFor(upstreamKind), {
-        method: "POST",
-        headers: auth.headers,
-        body: JSON.stringify(payloadFor(upstreamKind)),
-      });
+    const upstreamUrl = urlFor(upstreamKind);
+    // Built once per wire, not per attempt: a retry repeats the same bytes, which is the whole
+    // point of retrying a POST that failed on the network.
+    const payload = JSON.stringify(payloadFor(upstreamKind));
+
+    // A socket reset from a local proxy, a DNS timeout, or a gateway's brief 502 otherwise
+    // costs the whole turn — and the same request almost always succeeds on a second attempt.
+    // Every retry is counted onto the turn's ledger record, so a flaky network stays visible
+    // instead of being laundered into an apparent success.
+    const retryBudget = configuredRetries();
+    const onRetry = ({ attempt, delayMs, failure }: RetryAttempt): void => {
+      meta.retries = (meta.retries ?? 0) + 1;
+      console.warn(
+        `upstream retry ${attempt}/${retryBudget} for ${decision.provider} in ${delayMs}ms: ${describeRetryFailure(failure)}`,
+      );
+    };
 
     let upstream: Response;
+    let failureText = "";
     try {
-      upstream = await send();
+      ({ response: upstream, text: failureText } = await postUpstream(
+        upstreamUrl,
+        { method: "POST", headers: auth.headers, body: payload },
+        onRetry,
+      ));
       if (
         upstream.status === 401 &&
         provider.auth === "oauth" &&
@@ -1059,7 +1103,11 @@ async function forward(
         const refreshed = await resolveProviderAuth(provider, upstreamKind);
         if (!refreshed.error) {
           auth = refreshed;
-          upstream = await send();
+          ({ response: upstream, text: failureText } = await postUpstream(
+            upstreamUrl,
+            { method: "POST", headers: auth.headers, body: payload },
+            onRetry,
+          ));
         }
       }
     } catch (error) {
@@ -1069,7 +1117,9 @@ async function forward(
     captureQuotaHeaders(provider, upstream.headers);
 
     if (!upstream.ok) {
-      const text = await upstream.text();
+      // Read during the attempt, not here: a body left unread would hold the pooled socket
+      // that the next retry needs, and the last attempt's text is what gets reported.
+      const text = failureText;
       const limited = captureUsageLimit(provider, upstream.status, text);
       // Remote compaction v2 only ChatGPT's Responses API can answer. Failover onto
       // OpenRouter/DeepSeek would bridge to Chat Completions and Codex would then
@@ -1101,7 +1151,7 @@ async function forward(
         status: upstream.status,
         headers: {
           "content-type": upstream.headers.get("content-type") ?? "application/json",
-          ...decisionHeaders(decision),
+          ...decisionHeaders(decision, meta.retries),
           ...(quotaFailovers > 0 ? { "x-jevonian-quota-failovers": String(quotaFailovers) } : {}),
         },
       });
@@ -1129,7 +1179,7 @@ async function forward(
               usage,
             }),
             200,
-            decisionHeaders(decision),
+            decisionHeaders(decision, meta.retries),
           );
         }
         // Usage is Anthropic's, captured by the first stage: the Chat hop has no cache-write
@@ -1149,7 +1199,7 @@ async function forward(
           headers: {
             "content-type": "text/event-stream",
             "cache-control": "no-store",
-            ...decisionHeaders(decision),
+            ...decisionHeaders(decision, meta.retries),
           },
         });
       }
@@ -1158,7 +1208,11 @@ async function forward(
         const usage = anthropicUsage(json.usage);
         const cost = costOf(decision.model, usage, new Date(), decision.provider);
         record(meta, 200, usage, cost.usd, cost.known);
-        return c.json(anthropicToChat(json, decision.model), 200, decisionHeaders(decision));
+        return c.json(
+          anthropicToChat(json, decision.model),
+          200,
+          decisionHeaders(decision, meta.retries),
+        );
       }
       const usage = emptyUsage();
       const transform = anthropicToChatStream(decision.model, (finalUsage) => {
@@ -1171,7 +1225,7 @@ async function forward(
         headers: {
           "content-type": "text/event-stream",
           "cache-control": "no-store",
-          ...decisionHeaders(decision),
+          ...decisionHeaders(decision, meta.retries),
         },
       });
     }
@@ -1213,7 +1267,7 @@ async function forward(
               },
             },
             200,
-            decisionHeaders(decision),
+            decisionHeaders(decision, meta.retries),
           );
         }
         // Stream Gemini → chat SSE → Responses SSE.
@@ -1232,7 +1286,7 @@ async function forward(
           headers: {
             "content-type": "text/event-stream",
             "cache-control": "no-store",
-            ...decisionHeaders(decision),
+            ...decisionHeaders(decision, meta.retries),
           },
         });
       }
@@ -1245,7 +1299,7 @@ async function forward(
         return c.json(
           geminiChatCompletion(response, decision.model),
           200,
-          decisionHeaders(decision),
+          decisionHeaders(decision, meta.retries),
         );
       }
       const usage = emptyUsage();
@@ -1259,7 +1313,7 @@ async function forward(
         headers: {
           "content-type": "text/event-stream",
           "cache-control": "no-store",
-          ...decisionHeaders(decision),
+          ...decisionHeaders(decision, meta.retries),
         },
       });
     }
@@ -1278,7 +1332,7 @@ async function forward(
             headers: {
               "content-type": "text/event-stream",
               "cache-control": "no-store",
-              ...decisionHeaders(decision),
+              ...decisionHeaders(decision, meta.retries),
             },
           });
         }
@@ -1294,14 +1348,18 @@ async function forward(
             usage,
           }),
           200,
-          decisionHeaders(decision),
+          decisionHeaders(decision, meta.retries),
         );
       }
       const json = (await upstream.json()) as Record<string, unknown>;
       const usage = openaiUsage(json.usage);
       const cost = costOf(decision.model, usage, new Date(), decision.provider);
       record(meta, 200, usage, cost.usd, cost.known);
-      return c.json(chatToAnthropicMessage(json, decision.model), 200, decisionHeaders(decision));
+      return c.json(
+        chatToAnthropicMessage(json, decision.model),
+        200,
+        decisionHeaders(decision, meta.retries),
+      );
     }
 
     if (!upstreamStream && upstreamKind !== "responses") {
@@ -1312,7 +1370,7 @@ async function forward(
       const usage = clientKind === "openai" ? openaiUsage(json.usage) : anthropicUsage(json.usage);
       const cost = costOf(decision.model, usage, new Date(), decision.provider);
       record(meta, 200, usage, cost.usd, cost.known);
-      return c.json(json, 200, decisionHeaders(decision));
+      return c.json(json, 200, decisionHeaders(decision, meta.retries));
     }
 
     if (upstreamKind === "responses") {
@@ -1331,7 +1389,7 @@ async function forward(
             headers: {
               "content-type": "text/event-stream",
               "cache-control": "no-store",
-              ...decisionHeaders(decision),
+              ...decisionHeaders(decision, meta.retries),
             },
           });
         }
@@ -1358,7 +1416,7 @@ async function forward(
             Math.floor(started / 1000),
           ),
           200,
-          decisionHeaders(decision),
+          decisionHeaders(decision, meta.retries),
         );
       }
 
@@ -1378,7 +1436,7 @@ async function forward(
         const usage = responsesUsage(response.usage);
         const cost = costOf(decision.model, usage, new Date(), decision.provider);
         record(meta, 200, usage, cost.usd, cost.known);
-        return c.json(response, 200, decisionHeaders(decision));
+        return c.json(response, 200, decisionHeaders(decision, meta.retries));
       }
 
       const usage = emptyUsage();
@@ -1392,7 +1450,7 @@ async function forward(
         headers: {
           "content-type": upstream.headers.get("content-type") ?? "text/event-stream",
           "cache-control": "no-store",
-          ...decisionHeaders(decision),
+          ...decisionHeaders(decision, meta.retries),
         },
       });
     }
@@ -1450,7 +1508,7 @@ async function forward(
       headers: {
         "content-type": upstream.headers.get("content-type") ?? "text/event-stream",
         "cache-control": "no-store",
-        ...decisionHeaders(decision),
+        ...decisionHeaders(decision, meta.retries),
       },
     });
   }

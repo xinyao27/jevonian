@@ -204,6 +204,12 @@ function decisionRows(record: LogRecord): Array<{ label: string; value: string }
   rows.push({ label: "thinking effort", value: record.effort ?? "default" });
   if (record.effortNote) rows.push({ label: "effort note", value: record.effortNote });
   rows.push({ label: "reason", value: record.reason ?? "-" });
+  if (record.retries) {
+    rows.push({
+      label: "network retries",
+      value: `${record.retries} (transient upstream failure, recovered)`,
+    });
+  }
   const brain = [record.brain ?? "-", record.brainChannel ?? ""].filter(Boolean).join(" · ");
   rows.push({ label: "brain", value: brain });
   if (record.skipped && record.skipped.length > 0) {
@@ -232,6 +238,9 @@ function buildBundle(detail: LogDetailResponse): string {
     `- phase: ${record.phase ?? "-"}`,
     `- thinking effort: ${record.effort ?? "default"}${record.effortNote ? ` (${record.effortNote})` : ""}`,
     `- reason: ${record.reason ?? "-"}`,
+    ...(record.retries
+      ? [`- network retries: ${record.retries} (transient upstream failure, recovered)`]
+      : []),
     `- brain: ${record.brain ?? "-"}${record.brainChannel ? ` (channel ${record.brainChannel})` : ""}`,
     ...(record.skipped && record.skipped.length > 0
       ? [

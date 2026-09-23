@@ -38,6 +38,11 @@ export interface LedgerRecord {
   /** Probabilistic routing estimate, not the measured hit rate for this response. */
   cache?: import("./routing").CacheAffinity;
   switchPenaltyUsd?: number | null;
+  /**
+   * Transient upstream failures that were retried before this record was written. Absent when
+   * the first attempt succeeded, so a clean turn carries no field at all.
+   */
+  retries?: number;
   error?: string;
   /** Jevonian key ID that authorized the request, or "local" / "unauthenticated". */
   keyId?: string;

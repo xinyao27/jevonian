@@ -115,6 +115,7 @@ Trigger a pass immediately with `jevonian models --sync`, the Providers page **S
 | `JEVONIAN_NPM_REGISTRY`        | package metadata URL used by update checks                                        |
 | `JEVONIAN_CAPTURE_BODIES`      | set to `0` to stop storing request/brain payloads                                 |
 | `JEVONIAN_NO_OPEN`             | set to `1` to skip launching the browser                                          |
+| `JEVONIAN_UPSTREAM_RETRIES`    | retries after a transient upstream failure (default `2`, `0` disables, max `5`)   |
 | `JEVONIAN_SYSTEM_PROXY`        | set to `off` to ignore the macOS system proxy                                     |
 | `JEVONIAN_CLAUDE_CREDENTIALS`  | Claude Code credentials file (disables the keychain fallback)                     |
 | `JEVONIAN_CODEX_AUTH`          | Codex `auth.json` path                                                            |

@@ -4,6 +4,8 @@ import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
+import { retryingFetch } from "./retry";
+
 export type OAuthSource = "claude-code" | "codex" | "antigravity" | "static";
 
 export const CLAUDE_CODE_SYSTEM_PROMPT =
@@ -249,7 +251,7 @@ async function refreshAntigravity(
       client_secret: ANTIGRAVITY_CLIENT_SECRET,
       refresh_token: refreshToken,
     });
-    const response = await fetch("https://oauth2.googleapis.com/token", {
+    const response = await retryingFetch("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: body.toString(),
@@ -337,7 +339,7 @@ interface RefreshedClaude {
 
 async function refreshClaude(refreshToken: string): Promise<RefreshedClaude | undefined> {
   try {
-    const response = await fetch("https://console.anthropic.com/v1/oauth/token", {
+    const response = await retryingFetch("https://console.anthropic.com/v1/oauth/token", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -414,7 +416,7 @@ interface RefreshedCodex {
 
 async function refreshCodex(refreshToken: string): Promise<RefreshedCodex | undefined> {
   try {
-    const response = await fetch("https://auth.openai.com/oauth/token", {
+    const response = await retryingFetch("https://auth.openai.com/oauth/token", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({

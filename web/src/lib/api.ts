@@ -285,6 +285,8 @@ export interface LogRecord {
   effortNote?: string;
   /** Models code withheld from the brain, each with why. Never dropped silently. */
   skipped?: Array<{ model: string; provider: string; reason: string; detail: string }>;
+  /** Transient upstream failures retried before this turn was recorded. */
+  retries?: number;
   error?: string;
   /** Jevonian key that authorized the request, or "local" / "unauthenticated". */
   keyId?: string;
@@ -343,6 +345,8 @@ export interface QuotaWindow {
   limitUsd?: number;
   resetsAt?: string;
   status?: string;
+  /** Set when the window meters one model instead of the whole account. */
+  model?: string;
 }
 
 export interface ProviderQuotaView {

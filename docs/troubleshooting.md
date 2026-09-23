@@ -47,6 +47,12 @@ On macOS the system proxy lives in network settings, which Node's `fetch` ignore
 
 Transient socket resets from a local proxy (Clash and friends) are detected and surfaced as request failures rather than crashing the server.
 
+A _transient_ failure no longer reaches the agent at all: a dropped socket, a DNS blip, or a gateway 502/503/504 during the upstream call is retried in place (two retries by default, `250ms`→`500ms` with jitter). The same applies to the routing brain call and to OAuth token refreshes, so a flaky link fails a turn only when it is genuinely down. A retried turn records `retries` in the ledger and shows **network retries** in the log detail. Tune it with `JEVONIAN_UPSTREAM_RETRIES` (`0` disables; capped at `5`), and watch `serve.log` for `upstream retry …` / `brain retry …` lines.
+
+Retries deliberately stop at the point the network stops being the suspect: a `429` is a quota verdict, so it goes to failover (which can move the turn to another provider) rather than being repeated against the same host, and a `4xx` is never retried. Once a response body has started streaming, a mid-stream drop is not retried — the client already has partial output.
+
+A recovered response carries `x-jevonian-retries`, so a client can tell a first-try success from a recovered one.
+
 ## The ChatGPT subscription provider fails first
 
 `chatgpt.com` is exactly the kind of host a proxy rule exists for, so it is the provider that breaks first when proxying is wrong. Verify system-proxy detection above before suspecting the credential. If discovery lists no models, run the `codex` CLI once so it populates `~/.codex/models_cache.json`. After Codex refreshes that cache, `jevonian models --sync` (or the Providers page **Sync now**) appends new ids such as a newly released ChatGPT model into config.

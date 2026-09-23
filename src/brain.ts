@@ -2,6 +2,7 @@ import { withOpenRouterAttribution } from "./auth";
 import type { BrainConfig } from "./config";
 import { getCredential } from "./credentials";
 import type { Usage } from "./pricing";
+import { retryingFetch } from "./retry";
 
 export interface JevChannel {
   id: string;
@@ -398,6 +399,18 @@ export function normalizeEvaluationResult(result: EvaluationLike): Record<string
   };
 }
 
+/**
+ * Every raw brain request goes through here.
+ *
+ * The brain sits on the critical path of each routed turn, and a dropped socket against it
+ * fails the whole turn before a model is even asked. Retrying is bounded by the caller's
+ * timeout signal, so a brain that is genuinely down still fails at `timeoutMs` rather than
+ * after the backoff.
+ */
+async function fetchBrain(url: string, init: RequestInit): Promise<Response> {
+  return retryingFetch(url, init, { label: "brain" });
+}
+
 async function askVercelGateway(
   input: BrainInput,
   apiKey: string,
@@ -437,7 +450,7 @@ async function askCloudflareWorkersAi(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), input.brain.timeoutMs);
   try {
-    const response = await fetch(cloudflareAiRunUrl(accountId), {
+    const response = await fetchBrain(cloudflareAiRunUrl(accountId), {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -495,7 +508,7 @@ export async function askJev(input: BrainInput): Promise<BrainVerdict | undefine
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), input.brain.timeoutMs);
   try {
-    const response = await fetch(baseUrl, {
+    const response = await fetchBrain(baseUrl, {
       method: "POST",
       headers: jevHeaders(baseUrl, apiKey),
       body: JSON.stringify({
@@ -540,7 +553,7 @@ export async function askJevRaw(
       const accountId = brain.accountId?.trim();
       if (!accountId) throw new Error(`The "cloudflare" brain needs an account ID`);
       const model = transport.model || findJevChannel("cloudflare")?.model || "typesafe/jev";
-      const response = await fetch(cloudflareAiRunUrl(accountId), {
+      const response = await fetchBrain(cloudflareAiRunUrl(accountId), {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -560,7 +573,7 @@ export async function askJevRaw(
     }
 
     if (!transport.baseUrl) throw new Error(`The "${brain.channel}" brain has no endpoint`);
-    const response = await fetch(transport.baseUrl, {
+    const response = await fetchBrain(transport.baseUrl, {
       method: "POST",
       headers: jevHeaders(transport.baseUrl, transport.apiKey),
       body: JSON.stringify({ model: transport.model, state, questions }),

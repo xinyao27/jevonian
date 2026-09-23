@@ -1,6 +1,7 @@
 import type { Context } from "hono";
 
 import { LOCAL_CLIENT_KEYS } from "./local-client";
+import { retryingFetch } from "./retry";
 import { isDesktopRoutedModel } from "./routing";
 
 /**
@@ -136,7 +137,7 @@ export async function proxyNativeCodex(
   }
 
   try {
-    const response = await fetch(url, {
+    const response = await retryingFetch(url, {
       method: c.req.method,
       headers,
       body,
@@ -179,7 +180,12 @@ async function proxyUpstream(
       : await c.req.raw.arrayBuffer().catch(() => undefined));
 
   try {
-    const response = await fetch(url, { method, headers, body: payload, redirect: "manual" });
+    const response = await retryingFetch(url, {
+      method,
+      headers,
+      body: payload,
+      redirect: "manual",
+    });
     // Re-wrap so Hono can stream the body without buffering it fully.
     const out = new Headers(response.headers);
     out.delete("content-encoding");
