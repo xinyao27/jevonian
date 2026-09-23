@@ -6,11 +6,11 @@ Turn Jevonian into a remotely reachable endpoint — useful for cloud runners or
 "tunnel": { "enabled": true, "provider": "cloudflare" }
 ```
 
-| Provider     | Command                                                                  | Notes                                                                                    |
-| ------------ | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
-| `cloudflare` | `cloudflared tunnel --url http://127.0.0.1:<publicPort> --no-autoupdate` | quick tunnel, no account needed; gives a random `*.trycloudflare.com` URL                |
+| Provider     | Command                                                                  | Notes                                                                                                                                     |
+| ------------ | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `cloudflare` | `cloudflared tunnel --url http://127.0.0.1:<publicPort> --no-autoupdate` | quick tunnel, no account needed; gives a random `*.trycloudflare.com` URL                                                                 |
 | `ngrok`      | `ngrok http 127.0.0.1:<publicPort> [--url <domain>] --log stdout`        | needs `ngrok config add-authtoken` once; optional `url` binds a reserved / static domain; IPv4 loopback avoids `::1` refused on reconnect |
-| `custom`     | your command, `{port}` is replaced                                       | for bore, Tailscale Funnel, localtunnel, …                                               |
+| `custom`     | your command, `{port}` is replaced                                       | for bore, Tailscale Funnel, localtunnel, …                                                                                                |
 
 - The public listener lives on `tunnel.publicPort` (default: `listen.port + 1`) and binds `127.0.0.1`; the tunnel command points at it.
 - The tunnel process is detached from the server and recorded in `tunnel-state.json`, so a server restart (including `pnpm dev` HMR restarts) **reuses the same tunnel instead of creating a new one**. Quick tunnels (`cloudflare`, or `ngrok` without a `url`) therefore keep the same hostname until you press **Stop tunnel** or kill the process. For a permanent address, set `"provider": "ngrok", "url": "https://your-name.ngrok-free.dev"` (Dashboard → Domains), or use a named Cloudflare tunnel: `"provider": "custom", "command": "cloudflared tunnel run my-named-tunnel", "url": "https://ai.example.com"`.

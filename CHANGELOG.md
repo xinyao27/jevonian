@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## [0.1.5] - 2026-09-23
 
 ### Added
 
@@ -14,6 +14,10 @@ All notable changes to this project are documented in this file.
 
 - Tool call ids from OpenAI / Responses clients are rewritten to Anthropic's `^[a-zA-Z0-9_-]+$` charset (≤ 64 chars) with a hash suffix, so a punctuated id no longer gets a 400 and two ids differing only in punctuation stay distinct.
 - Claude subscription requests send a current Claude Code User-Agent (`claude-cli/2.1.280`); older versions hid newer subscription models.
+- Newer Claude models (4.6+) get `thinking: { type: "adaptive" }` with `output_config.effort` instead of `disabled` / `budget_tokens`, which those models reject. Always-thinking models map effort `none` to `low`, and a client-sent `thinking` block is translated rather than forwarded invalid.
+- Bridged Anthropic requests raise `max_tokens` above the thinking budget (or shrink the budget to the model's output cap), so enabling thinking no longer fails with a 400.
+- A client's own reasoning effort (Codex `reasoning.effort`, Chat `reasoning_effort`) now reaches Claude when bridged, instead of being dropped.
+- Streaming Responses → Anthropic keeps cache read/write usage in the ledger instead of recording zero.
 
 ## [0.1.4] - 2026-09-22
 
