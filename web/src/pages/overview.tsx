@@ -402,7 +402,7 @@ export function OverviewPage() {
             const status = update?.update;
             const restartOnly = Boolean(
               status?.restartRequired &&
-                (!status.updateAvailable || status.installed === status.latest),
+              (!status.updateAvailable || status.installed === status.latest),
             );
             const needsAction = Boolean(status?.updateAvailable || status?.restartRequired);
             return (

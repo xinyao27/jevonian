@@ -334,8 +334,7 @@ export class UpdateManager {
     if (status.error) throw new Error(`update check failed: ${status.error}`);
     if (!status.latest) return status;
     const needsPackage = isNewerVersion(status.latest, status.installed);
-    const needsRestart =
-      status.restartRequired || isNewerVersion(status.latest, this.current);
+    const needsRestart = status.restartRequired || isNewerVersion(status.latest, this.current);
     if (!needsPackage && !needsRestart) return status;
     if (this.installation.channel !== "npm" && this.installation.channel !== "pnpm") {
       throw new Error(

@@ -1188,9 +1188,7 @@ function recordBrainCall(input: {
     pricingKnown: cost.known,
     kind: "brain",
     reason: "routing-brain",
-    ...(input.verdict
-      ? {}
-      : { error: input.error?.trim() ? input.error : "brain unavailable" }),
+    ...(input.verdict ? {} : { error: input.error?.trim() ? input.error : "brain unavailable" }),
   });
 }
 
@@ -1621,7 +1619,10 @@ export async function decideRoute(
     // Same OpenRouter key often powers both the model provider and the brain channel. If the
     // provider is already known spent, do not burn another 402 on the decisions endpoint.
     const linked = config.providers.find((provider) => provider.name === entry.channel);
-    if (linked && providerQuotaHealth(linked, { lowPercent: guard.lowPercent, now }).status === "exhausted") {
+    if (
+      linked &&
+      providerQuotaHealth(linked, { lowPercent: guard.lowPercent, now }).status === "exhausted"
+    ) {
       skipChannels.add(entry.channel);
     }
   }

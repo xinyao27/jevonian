@@ -2,12 +2,7 @@ import { withOpenRouterAttribution } from "./auth";
 import type { BrainConfig } from "./config";
 import { getCredential } from "./credentials";
 import type { Usage } from "./pricing";
-import {
-  configuredRetries,
-  describeFailure,
-  isRetryableStatus,
-  withRetry,
-} from "./retry";
+import { configuredRetries, describeFailure, isRetryableStatus, withRetry } from "./retry";
 
 export interface JevChannel {
   id: string;
@@ -447,9 +442,7 @@ async function fetchBrain(url: string, init: RequestInit): Promise<Response> {
       await response.body?.cancel();
     },
     onRetry: ({ attempt, delayMs, failure }) => {
-      console.warn(
-        `brain retry ${attempt}/${budget} in ${delayMs}ms: ${describeFailure(failure)}`,
-      );
+      console.warn(`brain retry ${attempt}/${budget} in ${delayMs}ms: ${describeFailure(failure)}`);
     },
   });
 }
