@@ -314,4 +314,116 @@ describe("same-request quota failover", () => {
     expect(openrouterHits).toBe(1);
     expect(headerQuotas().deepseek?.windows[0]?.usedPercent).toBe(100);
   });
+
+  it("failovers Claude rate_limit_error when unified headers say the 5h window is spent", async () => {
+    // Anthropic's spend envelope is only `type: rate_limit_error` — not in the structured
+    // quota-token allow-list. The same 429 carries `anthropic-ratelimit-unified-*-status:
+    // rejected`; that header snapshot must trigger same-request failover onto the next
+    // model in the plan chain instead of returning 429 to the client.
+    const config = parseConfig({
+      defaultProvider: "claude-subscription",
+      providers: [
+        {
+          name: "claude-subscription",
+          type: "anthropic",
+          baseUrl: "https://api.anthropic.com",
+          apiKey: "claude-key",
+          billing: "subscription",
+          models: ["claude-opus-5-5"],
+        },
+        {
+          name: "chatgpt-subscription",
+          type: "both",
+          baseUrl: "https://api.openai.com/v1",
+          apiKey: "openai-key",
+          billing: "subscription",
+          models: ["gpt-6-astra"],
+        },
+      ],
+      routing: {
+        mode: "auto",
+        brains: [{ channel: "typesafe", apiKeyEnv: "TYPESAFE_API_KEY", timeoutMs: 1_000 }],
+        tiers: {
+          plan: ["claude-opus-5-5", "gpt-6-astra"],
+          execute: ["claude-opus-5-5", "gpt-6-astra"],
+          utility: ["gpt-6-astra"],
+          chat: ["gpt-6-astra"],
+        },
+      },
+    });
+
+    let claudeHits = 0;
+    let openaiHits = 0;
+    vi.stubGlobal("fetch", async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input;
+      if (url.includes("typesafe") || url.includes("systemone") || url.includes("evaluation")) {
+        return new Response(
+          JSON.stringify({
+            model: "jev-1.13.0",
+            answers: { model: { choice: "plan", confidence: 0.95 } },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.includes("api.anthropic.com")) {
+        claudeHits += 1;
+        return new Response(
+          JSON.stringify({
+            type: "error",
+            error: {
+              type: "rate_limit_error",
+              message: "This request would exceed your account's rate limit. Please try again later.",
+            },
+          }),
+          {
+            status: 429,
+            headers: {
+              "content-type": "application/json",
+              "anthropic-ratelimit-unified-5h-utilization": "1",
+              "anthropic-ratelimit-unified-5h-reset": String(Math.floor(Date.now() / 1000) + 3600),
+              "anthropic-ratelimit-unified-5h-status": "rejected",
+              "anthropic-ratelimit-unified-7d-utilization": "0.33",
+              "anthropic-ratelimit-unified-7d-status": "allowed",
+            },
+          },
+        );
+      }
+      if (url.includes("api.openai.com")) {
+        openaiHits += 1;
+        const body = typeof init?.body === "string" ? init.body : "";
+        expect(body).toContain("gpt-6-astra");
+        return new Response(
+          JSON.stringify({
+            id: "chatcmpl-1",
+            choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 1, completion_tokens: 1 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(`unexpected ${url}`, { status: 500 });
+    });
+
+    const app = createApp({ config }, new SessionStore(60_000));
+    const response = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "jevonian/auto",
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-jevonian-provider")).toBe("chatgpt-subscription");
+    expect(response.headers.get("x-jevonian-model")).toBe("gpt-6-astra");
+    expect(response.headers.get("x-jevonian-reason") ?? "").toContain("quota-failover");
+    expect(claudeHits).toBe(1);
+    expect(openaiHits).toBe(1);
+    expect(headerQuotas()["claude-subscription"]?.windows[0]).toMatchObject({
+      id: "5h",
+      usedPercent: 100,
+      status: "rejected",
+    });
+  });
 });

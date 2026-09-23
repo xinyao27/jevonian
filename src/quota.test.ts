@@ -93,6 +93,20 @@ describe("providerSpendSignal", () => {
       ),
     ).toBeUndefined();
     expect(providerSpendSignal(429, "The usage limit has been reached")).toBeUndefined();
+    // Anthropic's account-limit envelope reuses this type without a quota code. Body
+    // alone must stay non-signal — failover relies on the unified rate-limit headers.
+    expect(
+      providerSpendSignal(
+        429,
+        JSON.stringify({
+          type: "error",
+          error: {
+            type: "rate_limit_error",
+            message: "This request would exceed your account's rate limit. Please try again later.",
+          },
+        }),
+      ),
+    ).toBeUndefined();
   });
 });
 
@@ -173,6 +187,32 @@ describe("quota headers", () => {
       id: "5h",
       usedPercent: 10,
     });
+  });
+
+  it("marks Anthropic rejected windows exhausted even when utilization is under 100", () => {
+    const provider = parseConfig({
+      providers: [
+        {
+          name: "claude-sub",
+          type: "anthropic",
+          baseUrl: "https://api.anthropic.com/v1",
+          auth: "oauth",
+          oauthSource: "claude-code",
+          billing: "subscription",
+          models: ["claude-sonnet-4-6"],
+        },
+      ],
+    }).providers[0];
+    if (!provider) throw new Error("provider missing");
+    captureQuotaHeaders(
+      provider,
+      new Headers({
+        "anthropic-ratelimit-unified-5h-utilization": "0.99",
+        "anthropic-ratelimit-unified-5h-status": "rejected",
+        "anthropic-ratelimit-unified-5h-reset": String(Math.floor(Date.now() / 1000) + 3600),
+      }),
+    );
+    expect(providerQuotaHealth(provider).status).toBe("exhausted");
   });
 
   it("refreshes a snapshot whose window fields stayed identical past the TTL", () => {

@@ -341,6 +341,10 @@ export function captureQuotaHeaders(provider: Provider, headers: Headers): void 
     ...current,
     [provider.name]: { windows, fetchedAt: new Date().toISOString() },
   });
+  // Header snapshots must win over a still-fresh live probe. Claude's live TTL is
+  // five minutes — without this, a 429 that writes `5h=100% rejected` stays masked
+  // and the next turn keeps pinning the spent subscription.
+  liveCache.delete(provider.name);
 }
 
 /**
@@ -1182,8 +1186,15 @@ export function providerQuotaHealth(
     worst.limitUsd !== undefined && worst.usedUsd !== undefined
       ? Math.max(0, worst.limitUsd - worst.usedUsd)
       : liveBalance?.amount;
+  // Anthropic's unified headers set `status: rejected` when the window refuses more
+  // spend. Prefer that over utilization alone — a rejected window is exhausted even
+  // if a probe briefly reports utilization just under 100.
   let status: QuotaStatus =
-    usedPercent >= 100 ? "exhausted" : remainingPercent < lowPercent ? "low" : "ok";
+    worst.status === "rejected" || usedPercent >= 100
+      ? "exhausted"
+      : remainingPercent < lowPercent
+        ? "low"
+        : "ok";
   if (remainingUsd !== undefined && avgRequestUsd !== undefined) {
     if (remainingUsd < avgRequestUsd) status = "exhausted";
     else if (remainingUsd < avgRequestUsd * SUFFICIENT_REQUEST_MULTIPLE && status === "ok") {

@@ -42,7 +42,7 @@ import { appendRecord } from "./ledger";
 import { LOCAL_CLIENT_KEYS } from "./local-client";
 import { CLAUDE_CODE_SYSTEM_PROMPT, invalidateOAuthToken } from "./oauth";
 import { costOf, type Usage } from "./pricing";
-import { captureQuotaHeaders, captureUsageLimit } from "./quota";
+import { captureQuotaHeaders, captureUsageLimit, providerQuotaHealth } from "./quota";
 import {
   needsReasoningPassback,
   rememberFromChatCompletion,
@@ -1120,7 +1120,16 @@ async function forward(
       // Read during the attempt, not here: a body left unread would hold the pooled socket
       // that the next retry needs, and the last attempt's text is what gets reported.
       const text = failureText;
-      const limited = captureUsageLimit(provider, upstream.status, text);
+      // Structured spend tokens (usage_limit_reached, GoUsageLimitError, …) mark the
+      // provider exhausted. Claude subscription 429s usually only emit
+      // `type: rate_limit_error` — not in that allow-list — but the unified rate-limit
+      // headers on the same response already say the window is spent. After capturing
+      // those headers, treat an exhausted health bit as the same failover trigger so
+      // the next model in the phase chain (gpt-6-astra, …) gets the turn.
+      const limited =
+        captureUsageLimit(provider, upstream.status, text) ||
+        ((upstream.status === 429 || upstream.status === 403) &&
+          providerQuotaHealth(provider).status === "exhausted");
       // Remote compaction v2 only ChatGPT's Responses API can answer. Failover onto
       // OpenRouter/DeepSeek would bridge to Chat Completions and Codex would then
       // see "got 0 compaction items" — or our bridge guard. Keep the upstream error.
