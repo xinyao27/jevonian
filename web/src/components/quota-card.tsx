@@ -58,9 +58,7 @@ export function QuotaWindowRow({ window }: { window: QuotaWindow }) {
         <span className="flex items-baseline gap-1.5">
           <span className="font-medium">{window.label}</span>
           {window.model ? (
-            <span className="text-[10px] tracking-wide text-muted-foreground uppercase">
-              model
-            </span>
+            <span className="text-[10px] tracking-wide text-muted-foreground uppercase">model</span>
           ) : null}
         </span>
         <span className="text-muted-foreground">
