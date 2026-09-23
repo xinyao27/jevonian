@@ -7,6 +7,7 @@ import {
   ScrollTextIcon,
   ServerIcon,
 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { NavLink, Outlet } from "react-router";
 
 import { ErrorBoundary } from "@/components/error-boundary";
@@ -26,6 +27,7 @@ import {
   SidebarRail,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
+import { api } from "@/lib/api";
 
 const GITHUB_REPO = "https://github.com/xinyao27/jevonian";
 
@@ -48,6 +50,18 @@ const links = [
 ];
 
 export function Layout() {
+  // Prefer the running process version from the API. Baked web assets can drift
+  // ahead when the package on disk was updated without restarting the server.
+  const [version, setVersion] = useState(__JEVONIAN_VERSION__);
+  useEffect(() => {
+    void api
+      .update()
+      .then((response) => setVersion(response.update.current))
+      .catch(() => {
+        /* keep the build-time fallback */
+      });
+  }, []);
+
   return (
     <SidebarProvider>
       <Sidebar collapsible="icon">
@@ -61,9 +75,7 @@ export function Layout() {
             </span>
             <span className="grid min-w-0 flex-1 text-left leading-tight group-data-[collapsible=icon]:hidden">
               <span className="truncate text-sm font-semibold tracking-tight">Jevonian</span>
-              <span className="truncate text-[11px] text-muted-foreground">
-                v{__JEVONIAN_VERSION__}
-              </span>
+              <span className="truncate text-[11px] text-muted-foreground">v{version}</span>
             </span>
           </NavLink>
         </SidebarHeader>

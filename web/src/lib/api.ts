@@ -179,8 +179,10 @@ export interface ActivityReportView {
 
 export interface UpdateStatusView {
   current: string;
+  installed: string;
   latest?: string;
   updateAvailable: boolean;
+  restartRequired: boolean;
   channel: "npm" | "pnpm" | "source" | "unknown";
   installCommand?: string;
   checkedAt?: string;

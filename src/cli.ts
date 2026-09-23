@@ -55,7 +55,7 @@ import {
   uninstallService,
 } from "./service";
 import { TunnelManager } from "./tunnel";
-import { formatUpdateNotice, UPDATE_INTERVAL_MS, UpdateManager } from "./updates";
+import { formatUpdateNotice, isNewerVersion, UPDATE_INTERVAL_MS, UpdateManager } from "./updates";
 import { applyUserBinPath } from "./user-path";
 
 /** How often serve re-runs a (cache-aware) update check while staying up. */
@@ -885,25 +885,43 @@ async function launchCommand(argv: string[]): Promise<void> {
 
 async function updateCommand(): Promise<void> {
   const updates = new UpdateManager({ cachePath: updateStatePath() });
-  const checking = !("check" in flags);
-  const status = checking ? await updates.install() : await updates.check({ force: true });
+  const checkOnly = "check" in flags;
+  const before = updates.status();
+  const status = checkOnly ? await updates.check({ force: true }) : await updates.install();
   console.log(`current: ${status.current}`);
   console.log(`channel: ${status.channel}`);
+  if (status.installed !== status.current) console.log(`installed: ${status.installed}`);
   if (status.latest) console.log(`latest:  ${status.latest}`);
   if (status.error) {
     console.error(`update check failed: ${status.error}`);
     process.exitCode = 1;
     return;
   }
-  if (!status.updateAvailable) {
-    console.log("Jevonian is up to date.");
-    return;
-  }
-  if (!checking) {
+  if (checkOnly) {
+    if (status.restartRequired) {
+      console.log(
+        `Jevonian ${status.installed} is on disk; restart the running process (still ${status.current}) to apply it.`,
+      );
+      return;
+    }
+    if (!status.updateAvailable) {
+      console.log("Jevonian is up to date.");
+      return;
+    }
     const notice = formatUpdateNotice(status);
     if (notice) console.error(notice);
     else
       console.log(`update available: ${status.installCommand ?? "no supported install command"}`);
+    return;
+  }
+  if (!before.updateAvailable && !before.restartRequired) {
+    console.log("Jevonian is up to date.");
+    return;
+  }
+  if (before.restartRequired && !isNewerVersion(before.latest ?? "", before.installed)) {
+    console.log(
+      `Jevonian ${status.current} is already installed. Restart Jevonian to use the new version.`,
+    );
     return;
   }
   console.log(`updated to ${status.latest}. Restart Jevonian to use the new version.`);

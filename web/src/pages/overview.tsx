@@ -398,40 +398,60 @@ export function OverviewPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap items-center gap-3">
-          <Badge variant={update?.update.updateAvailable ? "default" : "outline"}>
-            {update?.active
-              ? `restarting · ${update.activeRequests ?? 0} active`
-              : update?.update.updateAvailable
-                ? `v${update.update.latest} available`
-                : `v${update?.update.current ?? "—"} · current`}
-          </Badge>
-          {update?.update.channel !== "source" && update?.update.channel !== "unknown" ? (
-            update?.update.updateAvailable ? (
-              <Button
-                size="sm"
-                onClick={() => void installUpdate()}
-                disabled={updateBusy || update.active}
-              >
-                {updateBusy ? "Installing…" : "Update and restart"}
-              </Button>
-            ) : (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => void checkUpdate()}
-                disabled={updateBusy}
-              >
-                Check now
-              </Button>
-            )
-          ) : (
-            <span className="text-xs text-muted-foreground">
-              Source checkouts update with Git and are never self-updated.
-            </span>
-          )}
-          {updateError || update?.error ? (
-            <span className="text-xs text-destructive">{updateError || update?.error}</span>
-          ) : null}
+          {(() => {
+            const status = update?.update;
+            const restartOnly = Boolean(
+              status?.restartRequired &&
+                (!status.updateAvailable || status.installed === status.latest),
+            );
+            const needsAction = Boolean(status?.updateAvailable || status?.restartRequired);
+            return (
+              <>
+                <Badge variant={needsAction ? "default" : "outline"}>
+                  {update?.active
+                    ? `restarting · ${update.activeRequests ?? 0} active`
+                    : restartOnly
+                      ? `v${status!.installed} ready · restart`
+                      : status?.updateAvailable
+                        ? `v${status.latest} available`
+                        : `v${status?.current ?? "—"} · current`}
+                </Badge>
+                {status?.channel !== "source" && status?.channel !== "unknown" ? (
+                  needsAction ? (
+                    <Button
+                      size="sm"
+                      onClick={() => void installUpdate()}
+                      disabled={updateBusy || Boolean(update?.active)}
+                    >
+                      {updateBusy
+                        ? restartOnly
+                          ? "Restarting…"
+                          : "Installing…"
+                        : restartOnly
+                          ? "Restart"
+                          : "Update and restart"}
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void checkUpdate()}
+                      disabled={updateBusy}
+                    >
+                      Check now
+                    </Button>
+                  )
+                ) : (
+                  <span className="text-xs text-muted-foreground">
+                    Source checkouts update with Git and are never self-updated.
+                  </span>
+                )}
+                {updateError || update?.error ? (
+                  <span className="text-xs text-destructive">{updateError || update?.error}</span>
+                ) : null}
+              </>
+            );
+          })()}
         </CardContent>
       </Card>
 

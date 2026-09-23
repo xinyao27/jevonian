@@ -23,9 +23,15 @@ export interface Installation {
 }
 
 export interface UpdateStatus {
+  /** Version this process started with (what is actually running). */
   current: string;
+  /** On-disk package.json version; may lead `current` after an external install. */
+  installed: string;
   latest?: string;
+  /** Registry has a release newer than the running process. */
   updateAvailable: boolean;
+  /** Disk already has a newer build than this process; a restart applies it. */
+  restartRequired: boolean;
   channel: InstallChannel;
   installCommand?: string;
   checkedAt?: string;
@@ -285,15 +291,21 @@ export class UpdateManager {
   }
 
   status(): UpdateStatus {
+    const installed = this.readInstalledVersion();
     const installCmd =
       this.installation.command ??
       (this.installation.channel === "npm" || this.installation.channel === "pnpm"
         ? installCommand(this.installation.channel, { bin: this.installation.bin })
         : undefined);
+    const updateAvailable = this.latest ? isNewerVersion(this.latest, this.current) : false;
+    // Disk can move ahead of a long-lived process (manual npm install, failed restart).
+    const restartRequired = isNewerVersion(installed, this.current);
     return {
       current: this.current,
+      installed,
       ...(this.latest ? { latest: this.latest } : {}),
-      updateAvailable: this.latest ? isNewerVersion(this.latest, this.current) : false,
+      updateAvailable,
+      restartRequired,
       channel: this.installation.channel,
       ...(installCmd ? { installCommand: installCmd } : {}),
       ...(this.checkedAt ? { checkedAt: this.checkedAt } : {}),
@@ -320,26 +332,33 @@ export class UpdateManager {
   async install(): Promise<UpdateStatus> {
     const status = await this.check({ force: true });
     if (status.error) throw new Error(`update check failed: ${status.error}`);
-    if (!status.updateAvailable || !status.latest) return status;
+    if (!status.latest) return status;
+    const needsPackage = isNewerVersion(status.latest, status.installed);
+    const needsRestart =
+      status.restartRequired || isNewerVersion(status.latest, this.current);
+    if (!needsPackage && !needsRestart) return status;
     if (this.installation.channel !== "npm" && this.installation.channel !== "pnpm") {
       throw new Error(
         `cannot update a ${this.installation.channel} installation; install ${PACKAGE_NAME} from npm first`,
       );
     }
-    // Pin the registry version we just fetched. PATH `npm`/`@latest` can lag or
-    // (with shims) install into a different Node prefix than this binary.
-    const command = installCommand(this.installation.channel, {
-      bin: this.installation.bin,
-      version: status.latest,
-    });
-    await this.runInstall(command);
-    const installed = this.readInstalledVersion();
-    if (installed !== status.latest) {
-      throw new Error(
-        `installer finished but ${PACKAGE_NAME} is still ${installed} (expected ${status.latest}). ` +
-          `Tried: ${command}`,
-      );
+    if (needsPackage) {
+      // Pin the registry version we just fetched. PATH `npm`/`@latest` can lag or
+      // (with shims) install into a different Node prefix than this binary.
+      const command = installCommand(this.installation.channel, {
+        bin: this.installation.bin,
+        version: status.latest,
+      });
+      await this.runInstall(command);
+      const installed = this.readInstalledVersion();
+      if (installed !== status.latest) {
+        throw new Error(
+          `installer finished but ${PACKAGE_NAME} is still ${installed} (expected ${status.latest}). ` +
+            `Tried: ${command}`,
+        );
+      }
     }
+    const installed = this.readInstalledVersion();
     this.current = installed;
     this.latest = installed;
     this.checkedAt = new Date(this.now()).toISOString();

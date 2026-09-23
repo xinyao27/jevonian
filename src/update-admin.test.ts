@@ -16,14 +16,18 @@ it("keeps serving while the package installs, then drains before restart", async
     releaseInstall = resolve;
   });
   let restarted = false;
+  let onDisk = "0.0.1";
   const lifecycle = new ServerLifecycle();
   const updates = new UpdateManager({
     current: "0.0.1",
     cachePath: join(dir, "updates.json"),
     installation: { channel: "npm", command: "npm install --global jevonian@latest" },
     fetchLatest: async () => "0.0.2",
-    install: async () => installWait,
-    readInstalledVersion: () => "0.0.2",
+    install: async () => {
+      await installWait;
+      onDisk = "0.0.2";
+    },
+    readInstalledVersion: () => onDisk,
   });
   await updates.check({ force: true });
   const state: AppState = {
@@ -66,6 +70,7 @@ it("resumes serving when the package install fails", async () => {
     install: async () => {
       throw new Error("registry unavailable");
     },
+    readInstalledVersion: () => "0.0.1",
   });
   await updates.check({ force: true });
   const state: AppState = {
@@ -106,6 +111,7 @@ it("refreshes a stale update cache when the dashboard polls GET /update", async 
       calls += 1;
       return calls === 1 ? "0.0.1" : "0.0.2";
     },
+    readInstalledVersion: () => "0.0.1",
   });
   await updates.check();
   expect(calls).toBe(1);
@@ -124,6 +130,41 @@ it("refreshes a stale update cache when the dashboard polls GET /update", async 
       update: { latest: "0.0.2", updateAvailable: true },
     });
     expect(calls).toBe(2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("restarts without reinstalling when the package on disk is already latest", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jev-update-admin-"));
+  let restarted = false;
+  const lifecycle = new ServerLifecycle();
+  const updates = new UpdateManager({
+    current: "0.1.5",
+    cachePath: join(dir, "updates.json"),
+    installation: { channel: "npm", command: "npm install --global jevonian@latest" },
+    fetchLatest: async () => "0.1.6",
+    install: async () => {
+      throw new Error("should not reinstall");
+    },
+    readInstalledVersion: () => "0.1.6",
+  });
+  await updates.check({ force: true });
+  const app = createAdminApp({
+    config: parseConfig({}),
+    updates,
+    lifecycle,
+    restart: () => {
+      restarted = true;
+    },
+  });
+
+  try {
+    const response = await app.request("/update/install", { method: "POST" });
+    expect(response.status).toBe(202);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(restarted).toBe(true);
+    expect(updates.status().current).toBe("0.1.6");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

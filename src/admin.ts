@@ -315,7 +315,9 @@ export function createAdminApp(state: AppState): Hono {
       ? await state.updates.check()
       : {
           current: "unknown",
+          installed: "unknown",
           updateAvailable: false,
+          restartRequired: false,
           channel: "unknown",
         };
     return c.json({
@@ -343,7 +345,7 @@ export function createAdminApp(state: AppState): Hono {
       return c.json({ error: "An update is already in progress." }, 409);
     }
     const status = state.updates.status();
-    if (!status.updateAvailable) {
+    if (!status.updateAvailable && !status.restartRequired) {
       return c.json(
         {
           error: status.latest
@@ -353,7 +355,8 @@ export function createAdminApp(state: AppState): Hono {
         409,
       );
     }
-    if (!status.installCommand) {
+    // Restart-only: disk already has the build; skip the package-manager gate.
+    if (status.updateAvailable && !status.installCommand) {
       return c.json({ error: "This installation is not managed by npm or pnpm." }, 409);
     }
     state.updateError = undefined;

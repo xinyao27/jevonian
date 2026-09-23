@@ -81,6 +81,7 @@ it("pins npm installs to the fetched version using the Node-adjacent npm binary"
   const dir = mkdtempSync(join(tmpdir(), "jev-update-"));
   try {
     let installed = "";
+    let onDisk = "0.0.1";
     const manager = new UpdateManager({
       current: "0.0.1",
       cachePath: join(dir, "updates.json"),
@@ -91,8 +92,9 @@ it("pins npm installs to the fetched version using the Node-adjacent npm binary"
       fetchLatest: async () => "0.0.2",
       install: async (command) => {
         installed = command;
+        onDisk = "0.0.2";
       },
-      readInstalledVersion: () => "0.0.2",
+      readInstalledVersion: () => onDisk,
     });
     await manager.install();
     expect(installed).toBe(
@@ -193,6 +195,36 @@ it("re-checks the registry after the 24h cache window", async () => {
     now += 24 * 60 * 60 * 1_000 + 1;
     expect((await manager.check()).updateAvailable).toBe(true);
     expect(calls).toBe(2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("reports restartRequired when disk is ahead of the running process", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jev-update-"));
+  try {
+    const manager = new UpdateManager({
+      current: "0.1.5",
+      cachePath: join(dir, "updates.json"),
+      installation: { channel: "npm", command: "npm install --global jevonian@latest" },
+      fetchLatest: async () => "0.1.6",
+      install: async () => {
+        throw new Error("should not install when disk already has latest");
+      },
+      readInstalledVersion: () => "0.1.6",
+    });
+    const status = await manager.check({ force: true });
+    expect(status).toMatchObject({
+      current: "0.1.5",
+      installed: "0.1.6",
+      latest: "0.1.6",
+      updateAvailable: true,
+      restartRequired: true,
+    });
+    const after = await manager.install();
+    expect(after.current).toBe("0.1.6");
+    expect(after.restartRequired).toBe(false);
+    expect(after.updateAvailable).toBe(false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
