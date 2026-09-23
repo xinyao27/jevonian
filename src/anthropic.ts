@@ -427,10 +427,13 @@ export function anthropicToChatStream(
     controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
   };
 
+  // Cache reads ride along as OpenAI's `prompt_tokens_details.cached_tokens`, so a Chat or
+  // Responses client downstream still sees them.
   const usagePayload = (): Record<string, unknown> => ({
     prompt_tokens: usage.input,
     completion_tokens: usage.output,
     total_tokens: usage.input + usage.output,
+    ...(usage.cacheRead > 0 ? { prompt_tokens_details: { cached_tokens: usage.cacheRead } } : {}),
   });
 
   const handle = (

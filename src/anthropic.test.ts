@@ -10,6 +10,8 @@ import {
   chatToAnthropicMessage,
   needsAnthropicWire,
 } from "./anthropic";
+import type { Usage } from "./pricing";
+import { chatToResponsesStream } from "./responses";
 describe("needsAnthropicWire", () => {
   it("detects Claude-family models", () => {
     expect(needsAnthropicWire("claude-fable-5-1")).toBe(true);
@@ -281,5 +283,44 @@ describe("anthropicToChatStream", () => {
     expect(deltas.at(-1)?.finish_reason).toBe("tool_calls");
     expect(output).toContain("data: [DONE]");
     expect(finished).toEqual({ input: 12, output: 7 });
+  });
+
+  it("keeps Anthropic cache usage through the Responses hop", async () => {
+    // Anthropic → Chat → Responses: the ledger must bill from Anthropic's usage (cache writes
+    // have no Chat field), and the Responses client should still see cached input tokens.
+    let anthropic: Usage | undefined;
+    let responses: Usage | undefined;
+    const toChat = anthropicToChatStream("claude-opus-4-7", (usage) => {
+      anthropic = usage;
+    });
+    const toResponses = chatToResponsesStream("claude-opus-4-7", (result) => {
+      responses = result.usage;
+    });
+    const events = [
+      {
+        type: "message_start",
+        message: {
+          usage: {
+            input_tokens: 10,
+            cache_read_input_tokens: 900,
+            cache_creation_input_tokens: 50,
+          },
+        },
+      },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+      { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 3 } },
+    ];
+    const sse = events.map((event) => `event: x\ndata: ${JSON.stringify(event)}\n\n`).join("");
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(sse));
+        controller.close();
+      },
+    });
+    const output = await collect(source.pipeThrough(toChat).pipeThrough(toResponses));
+
+    expect(anthropic).toEqual({ input: 10, output: 3, cacheRead: 900, cacheWrite: 50 });
+    expect(responses?.cacheRead).toBe(900);
+    expect(output).toContain('"cached_tokens":900');
   });
 });

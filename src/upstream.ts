@@ -8,11 +8,16 @@ import {
   chatToAnthropic,
   chatToAnthropicMessage,
 } from "./anthropic";
+import {
+  adaptiveEffort,
+  anthropicThinkingSupport,
+  fitThinkingMaxTokens,
+} from "./anthropic-thinking";
 import { resolveProviderAuth, withSessionAffinity } from "./auth";
 import { saveBody } from "./bodies";
 import { decodeBody } from "./body-encoding";
 import { askJevRaw } from "./brain";
-import { isReasoningEffort, type ReasoningEffort } from "./capabilities";
+import { effectiveCapabilities, isReasoningEffort, type ReasoningEffort } from "./capabilities";
 import { isClaudeGatewayRequest, resolveClaudeGatewayModel } from "./claude-gateway";
 import {
   compact,
@@ -452,13 +457,13 @@ export function withEffort(
   clientEffort?: string,
 ): Record<string, unknown> {
   const target = stripForeignEffort(body, wire);
-  if (!effort || clientEffort) return target;
   if (wire === "anthropic") {
-    // Anthropic takes a token budget, not a name. "Off" is written explicitly rather than by
-    // omitting the field, so a model that thinks by default cannot keep thinking silently.
-    if (effort === "none") return { ...target, thinking: { type: "disabled" } };
-    return { ...target, thinking: { type: "enabled", budget_tokens: effortBudget(effort) } };
+    // Normalised on every Anthropic body, client-set levels included: newer models answer the
+    // legacy shapes with a 400, and a request that cannot be sent is worse than a translated one.
+    if (!effort || clientEffort) return normalizeAnthropicThinking(target);
+    return anthropicWithEffort(target, effort);
   }
+  if (!effort || clientEffort) return target;
   if (wire === "responses") {
     // The Responses wire spells "off" as a null reasoning object.
     if (effort === "none") return { ...target, reasoning: null };
@@ -515,6 +520,109 @@ function effortBudget(effort: ReasoningEffort): number {
 }
 
 /**
+ * A Chat Completions body (native, or folded from Responses) as an Anthropic Messages body.
+ *
+ * `chatToAnthropic` has no Chat-side thinking field to carry, so the client's own
+ * `reasoning_effort` would be dropped and Claude would run without thinking even when the
+ * client asked for `high`. The client's level is therefore applied here as if the router had
+ * chosen it — it still wins over the router's choice — and written in the shape the model takes.
+ * `max_tokens` is then made consistent with that thinking configuration.
+ */
+export function bridgedAnthropicBody(
+  chatBody: Record<string, unknown>,
+  options: {
+    model: string;
+    stream: boolean;
+    effort?: ReasoningEffort;
+    clientEffort?: ReasoningEffort;
+    maxOutput?: number;
+  },
+): Record<string, unknown> {
+  const base = { ...chatToAnthropic(chatBody), model: options.model, stream: options.stream };
+  const effort = options.clientEffort ?? options.effort;
+  const max = chatBody.max_completion_tokens ?? chatBody.max_tokens;
+  return fitThinkingMaxTokens(withEffort(base, effort, "anthropic"), {
+    clientSetMax: typeof max === "number" && max > 0,
+    maxOutput: options.maxOutput,
+  });
+}
+
+/** Writes `output_config.effort`, keeping any other `output_config` keys the body carries. */
+function withOutputEffort(body: Record<string, unknown>, effort: string): Record<string, unknown> {
+  return { ...body, output_config: { ...asRecord(body.output_config), effort } };
+}
+
+/**
+ * The router's level in the shape the target Claude model accepts.
+ *
+ * Legacy models take a token budget. Adaptive models (Claude 4.6+) take
+ * `thinking: {type: "adaptive"}` plus `output_config.effort`. "Off" stays an explicit
+ * `disabled` where the model allows it, so a model that thinks by default cannot keep thinking
+ * silently; always-on models reject `disabled`, so they get the lowest effort instead.
+ */
+function anthropicWithEffort(
+  body: Record<string, unknown>,
+  effort: ReasoningEffort,
+): Record<string, unknown> {
+  const support = anthropicThinkingSupport(body.model);
+  if (!support.adaptive) {
+    if (effort === "none") return { ...body, thinking: { type: "disabled" } };
+    return { ...body, thinking: { type: "enabled", budget_tokens: effortBudget(effort) } };
+  }
+  if (effort === "none" && !support.rejectsDisabled) {
+    return { ...body, thinking: { type: "disabled" } };
+  }
+  // Keep a client's `display` choice; everything else in `thinking` is the router's to set.
+  const display = asRecord(body.thinking).display;
+  return withOutputEffort(
+    { ...body, thinking: { type: "adaptive", ...(display !== undefined ? { display } : {}) } },
+    adaptiveEffort(effort, support),
+  );
+}
+
+/**
+ * Translates thinking shapes the target model rejects — typically sent by a client targeting an
+ * older model — into the adaptive equivalent: `disabled` on always-on models becomes the lowest
+ * effort, and a `budget_tokens` request on models without extended thinking becomes the nearest
+ * effort level. An `output_config.effort` the client already set is kept.
+ */
+export function normalizeAnthropicThinking(body: Record<string, unknown>): Record<string, unknown> {
+  const thinking = asRecord(body.thinking);
+  const support = anthropicThinkingSupport(body.model);
+  const disabled = thinking.type === "disabled" && support.rejectsDisabled;
+  const enabled = thinking.type === "enabled" && support.rejectsEnabled;
+  if (!disabled && !enabled) return body;
+
+  const { budget_tokens: budget, type: _type, ...rest } = thinking;
+  // `display` is invalid alongside `disabled` but valid with `adaptive`, so keep what remains.
+  const next = { ...body, thinking: { ...rest, type: "adaptive" } };
+  if (typeof asRecord(body.output_config).effort === "string") return next;
+  let level: ReasoningEffort = "low";
+  if (enabled && typeof budget === "number") {
+    // The shallowest level whose budget covers the request, so thinking is never cut short.
+    const match = Object.entries(EFFORT_BUDGET).find(([, tokens]) => tokens >= budget);
+    level = match && isReasoningEffort(match[0]) ? match[0] : "max";
+  }
+  return withOutputEffort(next, adaptiveEffort(level, support));
+}
+
+/** Reads an adaptive `output_config.effort` back as a router level, or undefined. */
+function adaptiveEffortInBody(
+  body: Record<string, unknown>,
+  hint?: ReasoningEffort,
+): ReasoningEffort | undefined {
+  const effort = asRecord(body.output_config).effort;
+  if (typeof effort !== "string" || !isReasoningEffort(effort)) return undefined;
+  // The router's own level wins when it is what was written (e.g. `minimal` sent as `low`);
+  // `none` is excluded, because an always-on model sent `low` really does think.
+  if (hint && hint !== "none") {
+    const support = anthropicThinkingSupport(body.model);
+    if (adaptiveEffort(hint, support) === effort) return hint;
+  }
+  return effort;
+}
+
+/**
  * The thinking level an outgoing body actually carries, read back from whichever field the wire
  * uses. This is what the log reports, so the ledger states the level the model was really sent
  * rather than the level the router meant to send — the two differ when the client set its own
@@ -531,6 +639,8 @@ export function effortInBody(
   if (wire === "anthropic") {
     const thinking = asRecord(body.thinking);
     if (thinking.type === "disabled") return "none";
+    const adaptive = adaptiveEffortInBody(body, hint);
+    if (adaptive) return adaptive;
     const budget = thinking.budget_tokens;
     if (typeof budget !== "number") return undefined;
     if (hint && EFFORT_BUDGET[hint] === budget) return hint;
@@ -558,6 +668,9 @@ export function clientEffortOf(
   if (kind === "anthropic") {
     const thinking = asRecord(body.thinking);
     if (thinking.type === "disabled") return "none";
+    // A client on adaptive thinking states its level in `output_config.effort`.
+    const adaptive = adaptiveEffortInBody(body);
+    if (adaptive) return adaptive;
     const budget = thinking.budget_tokens;
     if (typeof budget !== "number") return undefined;
     const match = Object.entries(EFFORT_BUDGET).find(([, tokens]) => tokens === budget);
@@ -783,17 +896,22 @@ async function forward(
       // The client's own level, in whatever field its wire uses. Detected per wire so the router
       // never overrides an explicit instruction, and so the log can say who chose the level.
       const clientEffort = clientEffortOf(body, clientKind);
+      const maxOutput = effectiveCapabilities(
+        decision.model,
+        config.routing.capacities?.[decision.model],
+      ).maxOutput;
       if (wire === "anthropic" && bridgeToAnthropic) {
         // Responses clients fold through Chat Completions first (same two-hop as
         // Responses→Antigravity), then chatToAnthropic builds the Messages body.
         const chatBody =
           clientKind === "responses" ? responsesToChatRequest(body, decision.model) : body;
-        return withEffort(
-          { ...chatToAnthropic(chatBody), model: decision.model, stream: upstreamStream },
-          decision.effort,
-          "anthropic",
+        return bridgedAnthropicBody(chatBody, {
+          model: decision.model,
+          stream: upstreamStream,
+          effort: decision.effort,
           clientEffort,
-        );
+          maxOutput,
+        });
       }
       // Gemini must win over the OpenAI bridge: planUpstreamWire sets wire=openai +
       // bridge=to-openai for Responses→Antigravity so the body can be folded through
@@ -846,7 +964,7 @@ async function forward(
           clientEffort,
         );
       }
-      return withEffort(
+      const native = withEffort(
         { ...body, model: decision.model },
         decision.effort,
         // The body is already in the client's own shape here, so the effort field
@@ -856,6 +974,10 @@ async function forward(
         wire,
         clientEffort,
       );
+      // A router-written budget can exceed the client's own `max_tokens`, which Anthropic rejects.
+      return wire === "anthropic"
+        ? fitThinkingMaxTokens(native, { clientSetMax: true, maxOutput })
+        : native;
     };
 
     let upstreamBody: Record<string, unknown> = bodyFor(upstreamKind);
@@ -1010,12 +1132,14 @@ async function forward(
             decisionHeaders(decision),
           );
         }
+        // Usage is Anthropic's, captured by the first stage: the Chat hop has no cache-write
+        // field, so letting the Responses stage's usage win zeroed cacheRead/cacheWrite and
+        // under-billed cached turns. Recorded once, after the last stage flushes.
         const usage = emptyUsage();
         const toChat = anthropicToChatStream(decision.model, (finalUsage) => {
           Object.assign(usage, finalUsage);
         });
-        const toResponses = chatToResponsesStream(decision.model, (result) => {
-          Object.assign(usage, result.usage);
+        const toResponses = chatToResponsesStream(decision.model, () => {
           const cost = costOf(decision.model, usage, new Date(), decision.provider);
           record(meta, 200, usage, cost.usd, cost.known);
         });
