@@ -108,9 +108,37 @@ describe("canonicalVariants", () => {
     ]);
   });
 
-  it("respects the requested protocol", () => {
+  it("includes Anthropic-only hosts for OpenAI clients via the bridge", () => {
     const variants = canonicalVariants(mixedConfig(), "claude-sonnet-4.6", "openai");
-    expect(variants).toEqual([{ provider: "openrouter", model: "anthropic/claude-sonnet-4.6" }]);
+    expect(variants).toEqual([
+      { provider: "anthropic", model: "claude-sonnet-4-6", official: true },
+      { provider: "openrouter", model: "anthropic/claude-sonnet-4.6" },
+    ]);
+  });
+
+  it("excludes Responses-only hosts for Anthropic clients", () => {
+    const config = parseConfig({
+      providers: [
+        {
+          name: "anthropic",
+          type: "anthropic",
+          baseUrl: "https://api.anthropic.com/v1",
+          apiKey: "test",
+          models: ["gpt-5.4"],
+        },
+        {
+          name: "chatgpt",
+          type: "responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          auth: "oauth",
+          oauthSource: "codex",
+          models: ["gpt-5.4"],
+        },
+      ],
+    });
+    expect(canonicalVariants(config, "gpt-5.4", "anthropic")).toEqual([
+      { provider: "anthropic", model: "gpt-5.4" },
+    ]);
   });
 
   it("matches Antigravity service-tier suffixed ids", () => {
@@ -185,8 +213,9 @@ describe("routing with canonical ids", () => {
       now: 1_000,
     });
     if ("error" in decision) throw new Error(decision.error);
-    expect(decision.provider).toBe("openrouter");
-    expect(decision.model).toBe("anthropic/claude-sonnet-4.6");
+    // Official Anthropic host wins; OpenAI clients reach it via the to-anthropic bridge.
+    expect(decision.provider).toBe("anthropic");
+    expect(decision.model).toBe("claude-sonnet-4-6");
     expect(decision.canonical).toBe("claude-sonnet-4.6");
     expect(decision.reason).toBe("canonical-model");
     expect(decision.routed).toBe(false);

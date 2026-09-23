@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+### Added
+
+- Provider model auto-sync: while `serve` runs, Jevonian periodically discovers each provider's live model list and appends new ids to config (never removes or reorders). On by default for Codex, Claude Code, and Antigravity subscriptions; API-key and reseller providers opt in with `syncModels: true` (or opt any provider out with `false`). Deliberate removals stick via `excludeModels`, from the dashboard and from re-running `jevonian add`. Dashboard **Sync now**, `jevonian models --sync`, and `POST /api/model-sync/run` trigger a pass immediately. An empty auto-derived `plan` routing may fall back to an unpriced configured model so a brand-new flagship is reachable before models.dev prices it; cheap routings never pick an unpriced model.
+- Responses clients (Codex CLI, ChatGPT Desktop) can route to Anthropic-only hosts such as a Claude Pro/Max subscription, bridged through Chat Completions → Anthropic Messages and back (streaming included).
+- Chat Completions clients can route to Anthropic-only hosts. When a model is available both on its official host and a reseller, the official host now wins routing.
+
+### Fixed
+
+- Tool call ids from OpenAI / Responses clients are rewritten to Anthropic's `^[a-zA-Z0-9_-]+$` charset (≤ 64 chars) with a hash suffix, so a punctuated id no longer gets a 400 and two ids differing only in punctuation stay distinct.
+- Claude subscription requests send a current Claude Code User-Agent (`claude-cli/2.1.280`); older versions hid newer subscription models.
+
 ## [0.1.4] - 2026-09-22
 
 ### Added

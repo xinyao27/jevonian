@@ -10,6 +10,7 @@ import {
   applyProviderPreference,
   classifyPhase,
   decideRoute,
+  deriveRoutings,
   deriveTiers,
   extractUserQuery,
   lastUserMessage,
@@ -336,6 +337,99 @@ describe("deriveTiers", () => {
     expect(tiers.plan).toEqual(["p/frontier"]);
     expect(tiers.execute).toEqual(["p/stable-cheap"]);
     expect(tiers.utility).toEqual(["p/fast-exp"]);
+  });
+
+  it("falls back to an unpriced configured model when nothing is priced yet", () => {
+    usePriceTable({});
+    const routings = deriveRoutings(
+      parseConfig({
+        providers: [
+          {
+            name: "codex",
+            type: "responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            auth: "oauth",
+            oauthSource: "codex",
+            models: ["gpt-6-sol"],
+          },
+        ],
+      }),
+    );
+    expect(routings.find((entry) => entry.id === "plan")?.models).toEqual(["gpt-6-sol"]);
+  });
+
+  it("prefers priced models over unpriced ones when both are available", () => {
+    usePriceTable({
+      "gpt-6-astra": { provider: "openai", input: 2, output: 10 },
+    });
+    const routings = deriveRoutings(
+      parseConfig({
+        providers: [
+          {
+            name: "codex",
+            type: "responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            auth: "oauth",
+            oauthSource: "codex",
+            models: ["gpt-6-sol", "gpt-6-astra"],
+          },
+        ],
+      }),
+    );
+    expect(routings.find((entry) => entry.id === "plan")?.models).toEqual(["gpt-6-astra"]);
+    // A cheap routing is a cost claim an unknown price cannot back: it reuses the priced plan
+    // model rather than being pinned to the unpriced id.
+    expect(routings.find((entry) => entry.id === "execute")?.models).toEqual(["gpt-6-astra"]);
+  });
+
+  it("never makes an unpriced model the cheap pick while an expensive slot is open", () => {
+    usePriceTable({
+      "gpt-6-astra": { provider: "openai", input: 2, output: 10 },
+      "gpt-mini": { provider: "openai", input: 0.1, output: 0.4 },
+    });
+    const routings = deriveRoutings(
+      parseConfig({
+        providers: [
+          {
+            name: "codex",
+            type: "responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            auth: "oauth",
+            oauthSource: "codex",
+            models: ["gpt-6-sol", "gpt-6-astra", "gpt-mini"],
+          },
+        ],
+      }),
+    );
+    const cheap = routings.filter((entry) => entry.id !== "plan").flatMap((entry) => entry.models);
+    expect(cheap).not.toContain("gpt-6-sol");
+    expect(routings.find((entry) => entry.id === "execute")?.models).toEqual(["gpt-mini"]);
+  });
+
+  it("keeps fixed routings unchanged when a new unpriced model is configured", () => {
+    usePriceTable({ "gpt-6-astra": { provider: "openai", input: 2, output: 10 } });
+    const routings = deriveRoutings(
+      parseConfig({
+        providers: [
+          {
+            name: "codex",
+            type: "responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            auth: "oauth",
+            oauthSource: "codex",
+            models: ["gpt-6-astra", "gpt-6-sol"],
+          },
+        ],
+        routing: {
+          routings: [
+            { id: "plan", label: "Plan", description: "plan", models: ["gpt-6-astra"] },
+            { id: "execute", label: "Execute", description: "exec", models: ["gpt-6-astra"] },
+          ],
+        },
+      }),
+    );
+    expect(routings.find((entry) => entry.id === "plan")?.models).toEqual(["gpt-6-astra"]);
+    expect(routings.find((entry) => entry.id === "execute")?.models).toEqual(["gpt-6-astra"]);
   });
 });
 

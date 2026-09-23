@@ -81,6 +81,26 @@ using it. An explicit empty list (`[]`) withholds the model entirely. The Routin
 this field as you add and remove provider chips, and a list that matches discovery in order is
 dropped rather than stored. The older name for this field, `providerOrder`, still loads.
 
+## Model auto-sync
+
+While `serve` is running, Jevonian periodically discovers each provider's live model list and
+**appends** newly released ids to `providers[].models`. It never removes, reorders, or rewrites
+an existing entry (including per-model wire pins). Declared routings stay as you set them.
+A pass runs only when the last one (recorded in `model-sync.json`) is older than the interval, so
+restarting `serve` does not re-probe every provider. An unpriced new id can fill an empty `plan`
+routing as a last resort, but never a cheap one (`execute`, `utility`, …).
+
+| Field / flag                | Default            | Meaning                                                                               |
+| --------------------------- | ------------------ | ------------------------------------------------------------------------------------- |
+| `modelSync.enabled`         | `true`             | Master switch for background discovery                                                |
+| `modelSync.intervalMinutes` | `720`              | Minimum minutes between discovery passes (clamped ≥ 15)                               |
+| `providers[].syncModels`    | OAuth on / API off | Explicit `true`/`false` overrides. Absent → only Codex, Claude Code, Antigravity sync |
+| `providers[].excludeModels` | —                  | Ids discovery must not re-add; a dashboard/CLI removal is recorded here               |
+
+Trigger a pass immediately with `jevonian models --sync`, the Providers page **Sync now** button, or
+`POST /api/model-sync/run`. ChatGPT subscription discovery reads `~/.codex/models_cache.json`
+(run `codex` once if that cache is missing).
+
 ## Environment
 
 | Variable                       | Overrides                                                                         |
@@ -89,6 +109,7 @@ dropped rather than stored. The older name for this field, `providerOrder`, stil
 | `JEVONIAN_CREDENTIALS`         | credentials path                                                                  |
 | `JEVONIAN_DATA_DIR`            | data directory (ledger, catalog, pricing, quota)                                  |
 | `JEVONIAN_LEDGER`              | ledger path                                                                       |
+| `JEVONIAN_MODEL_SYNC_STATE`    | last model-discovery sync status                                                  |
 | `JEVONIAN_UPDATE_STATE`        | update-check cache path                                                           |
 | `JEVONIAN_INSTALL_CHANNEL`     | force `npm`, `pnpm`, `source`, or `unknown` for update handling                   |
 | `JEVONIAN_NPM_REGISTRY`        | package metadata URL used by update checks                                        |
@@ -111,6 +132,7 @@ dropped rather than stored. The older name for this field, `providerOrder`, stil
 | `~/.local/share/jevonian/keys.json`        | Jevonian API keys (`sk-jev-…`), hashed                                     |
 | `~/.local/share/jevonian/pricing.json`     | models.dev price snapshot (refreshed every 12h, or via `jevonian refresh`) |
 | `~/.local/share/jevonian/leaderboard.json` | models.dev unified-model benchmark snapshot (`models.json`; 12h TTL)       |
+| `~/.local/share/jevonian/model-sync.json`  | last provider model-discovery pass (added ids, errors, opt-outs)           |
 
 | `~/.local/share/jevonian/quota.json` | quota windows captured from headers and endpoints |
 | `~/.local/share/jevonian/bodies/` | captured request/brain payloads (`0600`, newest 1000) |

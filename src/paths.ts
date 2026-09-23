@@ -49,3 +49,8 @@ export function leaderboardPath(): string {
   if (process.env.JEVONIAN_LEADERBOARD) return process.env.JEVONIAN_LEADERBOARD;
   return join(dataDir(), "leaderboard.json");
 }
+
+export function modelSyncStatePath(): string {
+  if (process.env.JEVONIAN_MODEL_SYNC_STATE) return process.env.JEVONIAN_MODEL_SYNC_STATE;
+  return join(dataDir(), "model-sync.json");
+}

@@ -60,7 +60,11 @@ function claudeHeaders(headers: Record<string, string>, provider: Provider, toke
   if (provider.auth === "oauth") {
     headers.authorization = `Bearer ${token}`;
     headers["anthropic-beta"] = mergeBeta(provider.headers?.["anthropic-beta"], "oauth-2025-04-20");
-    headers["user-agent"] = provider.headers?.["user-agent"] ?? "claude-cli/2.1.0 (external, cli)";
+    // Anthropic gates subscription models on the Claude Code version in User-Agent, so a
+    // stale version here hides newer models. Bump it when a new model is refused on OAuth;
+    // operators can override per provider via `headers["user-agent"]`.
+    headers["user-agent"] =
+      provider.headers?.["user-agent"] ?? "claude-cli/2.1.280 (external, cli)";
   } else {
     headers["x-api-key"] = token;
     if (provider.type === "both") headers.authorization = `Bearer ${token}`;

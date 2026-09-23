@@ -93,15 +93,20 @@ export function providerSpeaks(provider: Provider, wire: ProviderType): boolean 
 
 /**
  * Routing filter: can this provider serve a client on `client`?
- * Includes bridgeable OpenAI-only providers for Anthropic clients, and Chat
- * Completions / Gemini hosts for Responses clients (ChatGPT Desktop / Codex).
+ * Includes bridgeable OpenAI↔Anthropic hosts, and Chat Completions / Gemini /
+ * Anthropic hosts for Responses clients (ChatGPT Desktop / Codex).
  */
 export function canServeClient(provider: Provider, client: ClientWire): boolean {
   if (providerSpeaks(provider, client)) return true;
   if (client === "anthropic" && provider.type === "openai") return true;
+  // Chat Completions clients → Claude Code OAuth / other Anthropic-only hosts.
+  if (client === "openai" && provider.type === "anthropic") return true;
   if (
     client === "responses" &&
-    (provider.type === "openai" || provider.type === "both" || provider.type === "gemini")
+    (provider.type === "openai" ||
+      provider.type === "both" ||
+      provider.type === "gemini" ||
+      provider.type === "anthropic")
   ) {
     return true;
   }
@@ -192,6 +197,8 @@ export function planUpstreamWire(input: {
   if (client === "responses") {
     if (wires.includes("responses")) return { wire: "responses", bridge: "none" };
     if (wires.includes("openai")) return { wire: "openai", bridge: "to-openai" };
+    // Codex / ChatGPT Desktop → Claude: fold through Chat Completions then Anthropic.
+    if (wires.includes("anthropic")) return { wire: "anthropic", bridge: "to-anthropic" };
     return {
       error: `Model "${model}" on "${provider.name}" cannot serve Responses clients`,
     };

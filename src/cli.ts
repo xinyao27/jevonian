@@ -12,6 +12,7 @@ import {
   apiKeySource,
   loadConfig,
   parseConfig,
+  reconcileExcludeModels,
   resolveApiKey,
   saveConfig,
   writeExampleConfig,
@@ -24,6 +25,7 @@ import {
 import { credentialsPath, getCredential, removeCredential, setCredential } from "./credentials";
 import { readRecords, type LedgerRecord } from "./ledger";
 import { ServerLifecycle } from "./lifecycle";
+import { scheduleModelSync, runModelSync } from "./model-sync";
 import { canonicalVariants, identityGaps } from "./models";
 import { loadProviderMeta, loadPricingSnapshot } from "./modelsdev";
 import type { OAuthSource } from "./oauth";
@@ -392,11 +394,38 @@ async function doctor(network: boolean): Promise<void> {
   }
 }
 
-async function models(refresh: boolean): Promise<void> {
+async function models(refresh: boolean, sync = false): Promise<void> {
   const config = loadConfig();
   if (!config || config.providers.length === 0) {
     console.error("No providers configured. Run `jevonian` and add one in the web UI.");
     process.exit(1);
+  }
+  if (sync) {
+    const outcome = await runModelSync({ load: loadConfig, save: saveConfig });
+    if (!outcome) {
+      console.log("models: nothing to sync");
+      return;
+    }
+    for (const entry of outcome.result.providers) {
+      if (entry.skipped === "opted-out") {
+        console.log(`${entry.provider}: skipped (syncModels: false)`);
+        continue;
+      }
+      if (entry.skipped === "default-off") {
+        console.log(`${entry.provider}: skipped (API/reseller; set syncModels: true to enable)`);
+        continue;
+      }
+      if (entry.error) {
+        console.log(`${entry.provider}: error: ${entry.error}`);
+        continue;
+      }
+      if (entry.added.length > 0) {
+        console.log(`${entry.provider}: +${entry.added.length} (${entry.added.join(", ")})`);
+      } else {
+        console.log(`${entry.provider}: up to date`);
+      }
+    }
+    return;
   }
   const entries = refresh ? await refreshCatalog(config) : loadCatalog();
   if (entries.length === 0) {
@@ -624,6 +653,11 @@ async function addProvider(): Promise<void> {
     console.log(`enabling ${models.length} models${preview}`);
   }
 
+  // Re-running `add` for an existing name replaces its settings, but must not forget the
+  // operator's sync choices: dropping `excludeModels` would let the next sync re-add every id
+  // they had removed, and any id this run leaves out is itself a removal worth remembering.
+  const previous = config.providers.find((provider) => provider.name === name);
+  const excludeModels = reconcileExcludeModels(previous, models);
   const stored: Provider = {
     name,
     type,
@@ -634,6 +668,8 @@ async function addProvider(): Promise<void> {
     ...(apiKey ? {} : apiKeyEnv ? { apiKeyEnv } : {}),
     models: models.map((id) => ({ id })),
     injectStreamUsage: true,
+    ...(typeof previous?.syncModels === "boolean" ? { syncModels: previous.syncModels } : {}),
+    ...(excludeModels ? { excludeModels } : {}),
   };
   if (apiKey) setCredential(name, apiKey);
 
@@ -934,7 +970,7 @@ async function main(): Promise<void> {
   } else if (command === "doctor") {
     await doctor("network" in flags);
   } else if (command === "models") {
-    await models("refresh" in flags);
+    await models("refresh" in flags, "sync" in flags);
   } else if (command === "pricing") {
     await pricing("refresh" in flags);
   } else if (command === "refresh") {
@@ -1017,6 +1053,16 @@ async function main(): Promise<void> {
     const lifecycle = new ServerLifecycle();
     const updates = new UpdateManager({ cachePath: updateStatePath() });
     const state: AppState = { config, tunnel, lifecycle, updates };
+    // Vendor model lists change between releases. Discovery appends what it finds so a new id
+    // becomes routable without re-running setup; it never removes or reorders.
+    scheduleModelSync({
+      load: loadConfig,
+      save: saveConfig,
+      onConfig: (next) => {
+        state.config = next;
+      },
+      log: (message) => console.log(message),
+    });
     const store = new SessionStore(config.routing.sessionTtlMinutes * 60_000);
     const app = createApp(state, store);
     const publicApp = createPublicApp(state, store);

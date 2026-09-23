@@ -12,6 +12,7 @@ Every command works against the same `~/.config/jevonian/config.json` the dashbo
 - `jevonian report` — spend, cache hit rate, brain-decided turns, and savings vs the baseline model
 - `jevonian doctor [--network]` — config, providers, tiers, ledger, catalog, pricing health
 - `jevonian models [--refresh]` — discovered models per provider (hits each provider's `/models`)
+- `jevonian models --sync` — append newly discovered model ids into `config.json` (same pass `serve` runs in the background)
 - `jevonian pricing [--refresh]` — price table source and size; `--refresh` pulls from models.dev
 - `jevonian quota [--refresh]` — per-provider quota windows, reset times, and 30-day spend
 - `jevonian update [--check]` — check for or install the latest release through the detected package manager

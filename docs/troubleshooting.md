@@ -49,7 +49,7 @@ Transient socket resets from a local proxy (Clash and friends) are detected and 
 
 ## The ChatGPT subscription provider fails first
 
-`chatgpt.com` is exactly the kind of host a proxy rule exists for, so it is the provider that breaks first when proxying is wrong. Verify system-proxy detection above before suspecting the credential. If discovery lists no models, run the `codex` CLI once so it populates `~/.codex/models_cache.json`.
+`chatgpt.com` is exactly the kind of host a proxy rule exists for, so it is the provider that breaks first when proxying is wrong. Verify system-proxy detection above before suspecting the credential. If discovery lists no models, run the `codex` CLI once so it populates `~/.codex/models_cache.json`. After Codex refreshes that cache, `jevonian models --sync` (or the Providers page **Sync now**) appends new ids such as a newly released ChatGPT model into config.
 
 ## Live quota fetch is rejected
 

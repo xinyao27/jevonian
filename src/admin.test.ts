@@ -384,6 +384,69 @@ describe("admin config writes", () => {
     expect(written.providers.map((provider) => provider.name)).toEqual(["alpha", "gamma"]);
   });
 
+  it("round-trips syncModels and records dashboard removals in excludeModels", async () => {
+    const path = process.env.JEVONIAN_CONFIG ?? "";
+    writeFileSync(
+      path,
+      `${JSON.stringify({
+        providers: [
+          {
+            ...baseProvider("alpha"),
+            models: ["a", "b"],
+            syncModels: true,
+          },
+        ],
+      })}\n`,
+    );
+    const state: AppState = { config: loadConfig() ?? parseConfig({}) };
+    const app = createAdminApp(state);
+
+    const view = (await (await app.request("/state")).json()) as {
+      config: { providers: Array<{ name: string; syncModels?: boolean }> };
+    };
+    // An explicit `true` must reach the form, or the next save would silently turn sync off.
+    expect(view.config.providers[0]?.syncModels).toBe(true);
+
+    const post = (body: Record<string, unknown>) =>
+      app.request("/providers", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "alpha",
+          type: "openai",
+          baseUrl: "https://alpha.example.com/v1",
+          ...body,
+        }),
+      });
+    const written = () =>
+      JSON.parse(readFileSync(path, "utf8")) as {
+        providers: Array<{ models: string[]; syncModels?: boolean; excludeModels?: string[] }>;
+      };
+
+    // Absent keeps the override; dropping "b" is remembered.
+    expect((await post({ models: ["a"] })).status).toBe(200);
+    expect(written().providers[0]?.syncModels).toBe(true);
+    expect(written().providers[0]?.excludeModels).toEqual(["b"]);
+
+    // `null` clears the override so the provider follows its default again.
+    expect((await post({ models: ["a"], syncModels: null })).status).toBe(200);
+    expect(written().providers[0]).not.toHaveProperty("syncModels");
+    expect(written().providers[0]?.excludeModels).toEqual(["b"]);
+  });
+
+  it("clamps a too-short model-sync interval", async () => {
+    const path = process.env.JEVONIAN_CONFIG ?? "";
+    writeConfig(path, [baseProvider("alpha")]);
+    const app = createAdminApp({ config: loadConfig() ?? parseConfig({}) });
+    const response = await app.request("/model-sync", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ intervalMinutes: 5 }),
+    });
+    const body = (await response.json()) as { config: { intervalMinutes: number } };
+    expect(body.config.intervalMinutes).toBe(15);
+  });
+
   it("saves custom routings and rejects dropping a builtin", async () => {
     const path = process.env.JEVONIAN_CONFIG ?? "";
     writeConfig(path, [baseProvider("alpha")]);

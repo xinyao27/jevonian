@@ -5,6 +5,7 @@ import {
   anthropicToChat,
   anthropicToChatRequest,
   anthropicToChatStream,
+  anthropicToolId,
   chatToAnthropic,
   chatToAnthropicMessage,
   needsAnthropicWire,
@@ -120,6 +121,57 @@ describe("chatToAnthropic", () => {
       tool_use_id: "call_1",
       content: "line one",
     });
+  });
+
+  it("sanitizes tool ids to Anthropic's charset and keeps call/result paired", () => {
+    const dirty = "call:abc.def/1";
+    const request = chatToAnthropic({
+      messages: [
+        {
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            { id: dirty, type: "function", function: { name: "read", arguments: "{}" } },
+          ],
+        },
+        { role: "tool", tool_call_id: dirty, content: "ok" },
+      ],
+    });
+    const messages = request.messages as Array<{ content: Array<Record<string, unknown>> }>;
+    const useId = messages[0]?.content[0]?.id;
+    const resultId = messages[1]?.content[0]?.tool_use_id;
+    expect(String(useId)).toMatch(/^call_abc_def_1_[a-f0-9]{8}$/);
+    expect(resultId).toBe(useId);
+  });
+
+  it("keeps ids distinct when they differ only in punctuation", () => {
+    const ids = ["call:a", "call.a", "call_a"].map((id) => anthropicToolId(id));
+    expect(new Set(ids).size).toBe(3);
+    expect(ids[2]).toBe("call_a");
+    for (const id of ids) expect(id).toMatch(/^[a-zA-Z0-9_-]{1,64}$/);
+  });
+
+  it("truncates long ids to Anthropic's length limit", () => {
+    const id = anthropicToolId(`call.${"x".repeat(200)}`);
+    expect(id.length).toBeLessThanOrEqual(64);
+    expect(id).toMatch(/^[a-zA-Z0-9_-]+$/);
+  });
+
+  it("hashes empty or unrecoverable tool ids deterministically", () => {
+    const request = chatToAnthropic({
+      messages: [
+        {
+          role: "assistant",
+          content: "",
+          tool_calls: [{ id: "", type: "function", function: { name: "read", arguments: "{}" } }],
+        },
+        { role: "tool", tool_call_id: "", content: "ok" },
+      ],
+    });
+    const messages = request.messages as Array<{ content: Array<Record<string, unknown>> }>;
+    const useId = String(messages[0]?.content[0]?.id);
+    expect(useId).toMatch(/^tool_[a-f0-9]{24}$/);
+    expect(messages[1]?.content[0]?.tool_use_id).toBe(useId);
   });
 });
 

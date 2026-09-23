@@ -30,7 +30,12 @@ import {
   syncRoutingViews,
   tiersFromRoutings,
   mergeModelEntries,
+  MODEL_SYNC_DEFAULT_SOURCES,
+  parseModelSync,
+  parseTunnel,
   providerModelIds,
+  providerSyncsModels,
+  reconcileExcludeModels,
   type BrainConfig,
   type Config,
   type Provider,
@@ -41,11 +46,11 @@ import {
   type QuotaGuardConfig,
   type RoutingEntry,
 } from "./config";
-import { parseTunnel } from "./config";
 import { getCredential, removeCredential, setCredential } from "./credentials";
 import { createKey, hasKeys, listKeysWithUsage, revokeKey, updateKey } from "./keys";
 import { readRecords, subscribeLedger, type LedgerRecord } from "./ledger";
 import type { ServerLifecycle } from "./lifecycle";
+import { loadModelSyncState, runModelSync } from "./model-sync";
 import { canonicalModelId, canonicalModels } from "./models";
 import { loadPricingSnapshot } from "./modelsdev";
 import type { OAuthSource } from "./oauth";
@@ -195,12 +200,35 @@ function parseQuota(value: unknown): ProviderQuotaSpec | undefined {
   return Object.keys(quota).length > 0 ? quota : undefined;
 }
 
-function providerPayload(body: Record<string, unknown>, name: string, baseUrl: string): Provider {
+function providerPayload(
+  body: Record<string, unknown>,
+  name: string,
+  baseUrl: string,
+  previous?: Provider,
+): Provider {
   const auth = parseAuth(body.auth);
   const oauthSource = auth === "oauth" ? parseOAuthSource(body.oauthSource) : undefined;
   const quota = parseQuota(body.quota);
   const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
   const apiKeyEnv = typeof body.apiKeyEnv === "string" ? body.apiKeyEnv.trim() : "";
+  const models = mergeModelEntries(previous?.models, body.models);
+  const explicitExclude = Array.isArray(body.excludeModels)
+    ? body.excludeModels.filter((id): id is string => typeof id === "string")
+    : undefined;
+  const excludeModels = reconcileExcludeModels(
+    previous,
+    models.map((entry) => entry.id),
+    explicitExclude,
+  );
+  // `null` clears the override so the provider follows the OAuth-source default again; the
+  // dashboard sends it whenever the checkbox matches that default, so a save never pins a value
+  // the operator did not choose. Absent keeps whatever the file already had.
+  const syncModels =
+    body.syncModels === false || body.syncModels === true
+      ? body.syncModels
+      : body.syncModels === null
+        ? undefined
+        : previous?.syncModels;
   return {
     name,
     type: parseType(body.type),
@@ -210,8 +238,14 @@ function providerPayload(body: Record<string, unknown>, name: string, baseUrl: s
     billing: parseBilling(body.billing),
     ...(quota ? { quota } : {}),
     ...(apiKey ? {} : apiKeyEnv ? { apiKeyEnv } : {}),
-    models: mergeModelEntries(undefined, body.models),
+    models,
     injectStreamUsage: true,
+    ...(syncModels === false
+      ? { syncModels: false }
+      : syncModels === true
+        ? { syncModels: true }
+        : {}),
+    ...(excludeModels ? { excludeModels } : {}),
   };
 }
 
@@ -250,6 +284,10 @@ export function createAdminApp(state: AppState): Hono {
           quota: provider.quota,
           keySource: apiKeySource(provider),
           models: providerModelIds(provider),
+          ...(typeof provider.syncModels === "boolean" ? { syncModels: provider.syncModels } : {}),
+          ...(provider.excludeModels && provider.excludeModels.length > 0
+            ? { excludeModels: provider.excludeModels }
+            : {}),
         })),
         routing: {
           ...config.routing,
@@ -258,7 +296,9 @@ export function createAdminApp(state: AppState): Hono {
             keySource: brainKeySource(brain),
           })),
         },
+        modelSync: config.modelSync,
       },
+      modelSyncDefaultSources: MODEL_SYNC_DEFAULT_SOURCES,
       tiers: deriveTiers(config),
       routings: deriveRoutings(config),
       pricing: pricingInfo(),
@@ -682,8 +722,7 @@ export function createAdminApp(state: AppState): Hono {
     const config = loadConfig() ?? state.config;
     const previous = config.providers.find((provider) => provider.name === name);
 
-    const stored = providerPayload(body, name, baseUrl);
-    stored.models = mergeModelEntries(previous?.models, body.models);
+    const stored = providerPayload(body, name, baseUrl, previous);
     if (apiKey) setCredential(name, apiKey);
 
     const index = config.providers.findIndex((provider) => provider.name === name);
@@ -840,6 +879,47 @@ export function createAdminApp(state: AppState): Hono {
     const result = await refreshCatalogCaches({ force: true });
     initPricing();
     return c.json({ ...result, status: catalogStatus() });
+  });
+
+  const modelSyncPayload = (): Record<string, unknown> => {
+    const syncState = loadModelSyncState();
+    return {
+      config: state.config.modelSync,
+      lastCheckedAt: syncState?.checkedAt,
+      lastAdded: syncState?.added ?? 0,
+      providers: syncState?.providers ?? [],
+      providersSkipped: state.config.providers
+        .filter((provider) => !providerSyncsModels(provider))
+        .map((provider) => provider.name),
+    };
+  };
+
+  app.get("/model-sync", (c) => c.json(modelSyncPayload()));
+
+  app.put("/model-sync", async (c) => {
+    const body = asRecord(await c.req.json().catch(() => ({})));
+    const config = loadConfig() ?? state.config;
+    const next: Config = {
+      ...config,
+      modelSync: parseModelSync({
+        ...config.modelSync,
+        ...(typeof body.enabled === "boolean" ? { enabled: body.enabled } : {}),
+        ...(typeof body.intervalMinutes === "number"
+          ? { intervalMinutes: body.intervalMinutes }
+          : {}),
+      }),
+    };
+    persist(next);
+    return c.json(modelSyncPayload());
+  });
+
+  app.post("/model-sync/run", async (c) => {
+    const outcome = await runModelSync({
+      load: () => loadConfig() ?? state.config,
+      save: saveConfig,
+    });
+    if (outcome) state.config = outcome.config ?? state.config;
+    return c.json({ ...modelSyncPayload(), ...(outcome ? { result: outcome.result } : {}) });
   });
 
   app.get("/keys", (c) => c.json({ keys: listKeysWithUsage() }));

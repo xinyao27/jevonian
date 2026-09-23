@@ -700,15 +700,29 @@ export function deriveRoutings(config: Config): RoutingEntry[] {
       return price ? [{ model, output: price.output, experimental: isExperimental(model) }] : [];
     })
     .sort((left, right) => right.output - left.output);
+  // A model the catalog has no price for is still a real candidate — a vendor ships an id
+  // before models.dev lists it, and withholding it would keep a brand-new flagship unreachable
+  // until the snapshot catches up. Cost is the only ranking signal available, and an unpriced
+  // model has none, so it forms a second tier behind every priced model — and only for the
+  // `expensive` direction. A cheap pick is a cost claim ("this is the inexpensive one"), which
+  // an unknown price cannot back; a cheap routing with no priced candidate left falls through
+  // to the reuse fallback below instead of being pinned to an unknown.
+  const unpriced = available
+    .filter((model) => !priceFor(model))
+    .map((model) => ({ model, output: 0, experimental: isExperimental(model) }));
 
   const pick = (exclude: Set<string>, direction: "expensive" | "cheap"): string | undefined => {
-    const ordered = direction === "expensive" ? priced : [...priced].reverse();
-    const stable = ordered.find(
-      (candidate) => !candidate.experimental && !exclude.has(candidate.model),
-    );
-    if (stable) return stable.model;
-    const any = ordered.find((candidate) => !exclude.has(candidate.model));
-    return any?.model;
+    const tiers = direction === "expensive" ? [priced, unpriced] : [priced];
+    for (const tier of tiers) {
+      const ordered = direction === "expensive" ? tier : [...tier].reverse();
+      const stable = ordered.find(
+        (candidate) => !candidate.experimental && !exclude.has(candidate.model),
+      );
+      if (stable) return stable.model;
+      const any = ordered.find((candidate) => !exclude.has(candidate.model));
+      if (any) return any.model;
+    }
+    return undefined;
   };
 
   const used = new Set<string>();

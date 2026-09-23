@@ -19,6 +19,13 @@ export interface ProviderView {
   quota?: ProviderQuotaSpecView;
   keySource: string;
   models: string[];
+  /**
+   * Explicit override. Absent: follow the default (sync only for the OAuth sources listed in
+   * `StateResponse.modelSyncDefaultSources`).
+   */
+  syncModels?: boolean;
+  /** Model ids discovery must not re-add after a deliberate removal. */
+  excludeModels?: string[];
 }
 
 export interface PresetView {
@@ -187,12 +194,39 @@ export interface UpdateResponse {
   error?: string;
 }
 
+export interface ModelSyncConfigView {
+  enabled: boolean;
+  intervalMinutes: number;
+}
+
+export interface ModelSyncProviderResultView {
+  provider: string;
+  added: string[];
+  skipped?: "opted-out" | "default-off";
+  error?: string;
+}
+
+export interface ModelSyncResponse {
+  config: ModelSyncConfigView;
+  lastCheckedAt?: string;
+  lastAdded: number;
+  providers: ModelSyncProviderResultView[];
+  providersSkipped: string[];
+  result?: {
+    checkedAt: string;
+    added: number;
+    changed: boolean;
+    providers: ModelSyncProviderResultView[];
+  };
+}
+
 export interface StateResponse {
   config: {
     listen: { host: string; port: number };
     defaultProvider?: string;
     providers: ProviderView[];
     routing: RoutingView;
+    modelSync?: ModelSyncConfigView;
   };
   tiers: { plan: string[]; execute: string[]; utility: string[]; chat: string[] };
   routings: RoutingEntryView[];
@@ -200,6 +234,8 @@ export interface StateResponse {
   keys: KeyView[];
   brainChannels: BrainChannelView[];
   presets: PresetView[];
+  /** OAuth sources that auto-sync when a provider has no explicit `syncModels`. */
+  modelSyncDefaultSources?: string[];
   update?: UpdateStatusView;
 }
 
@@ -656,6 +692,9 @@ export const api = {
     billing?: ProviderBillingView;
     quota?: ProviderQuotaSpecView;
     models?: string[];
+    /** `null` clears the override so the provider follows the OAuth-source default. */
+    syncModels?: boolean | null;
+    excludeModels?: string[];
   }) =>
     request<{ config: unknown }>("/api/providers", {
       method: "POST",
@@ -677,6 +716,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  modelSync: () => request<ModelSyncResponse>("/api/model-sync"),
+  saveModelSync: (payload: { enabled?: boolean; intervalMinutes?: number }) =>
+    request<ModelSyncResponse>("/api/model-sync", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  runModelSync: () => request<ModelSyncResponse>("/api/model-sync/run", { method: "POST" }),
   createKey: (name: string, limitUsd?: number | null) =>
     request<{ key: string; record: KeyView }>("/api/keys", {
       method: "POST",

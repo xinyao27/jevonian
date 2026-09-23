@@ -108,6 +108,56 @@ function asString(value: unknown): string {
 }
 
 /**
+ * Non-stream Chat Completions body → Responses API body. Shared by every path that answers a
+ * Responses client from a chat-shaped result (OpenAI hosts directly, Anthropic hosts via
+ * `anthropicToChat`), so the two cannot drift on ids, tool-call shape, or usage fields.
+ */
+function chatJsonToResponse(
+  chat: Record<string, unknown>,
+  context: { model: string; session: string; started: number; usage: Usage },
+): Record<string, unknown> {
+  const choice = asRecord(asRecord((chat.choices as unknown[])?.[0]).message);
+  const toolCalls = Array.isArray(choice.tool_calls) ? choice.tool_calls : [];
+  const output: unknown[] = [];
+  if (typeof choice.content === "string" && choice.content.length > 0) {
+    output.push({
+      type: "message",
+      role: "assistant",
+      content: [{ type: "output_text", text: choice.content }],
+    });
+  }
+  for (const raw of toolCalls) {
+    const call = asRecord(raw);
+    const fn = asRecord(call.function);
+    const callId =
+      typeof call.id === "string" && call.id.length > 0
+        ? call.id
+        : `call_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+    output.push({
+      type: "function_call",
+      call_id: callId,
+      name: asString(fn.name),
+      arguments: typeof fn.arguments === "string" ? fn.arguments : "",
+    });
+  }
+  const { usage } = context;
+  return {
+    id: `resp_${context.session.slice(0, 16)}`,
+    object: "response",
+    created_at: Math.floor(context.started / 1000),
+    status: "completed",
+    model: context.model,
+    output,
+    usage: {
+      input_tokens: usage.input,
+      output_tokens: usage.output,
+      total_tokens: usage.input + usage.output,
+      input_tokens_details: { cached_tokens: usage.cacheRead },
+    },
+  };
+}
+
+/**
  * Codex remote compaction v2 only works on a native Responses host (ChatGPT backend).
  * Bridging to Chat Completions returns a normal message item and Codex aborts with
  * "expected exactly one compaction output item, got 0 from N".
@@ -734,8 +784,12 @@ async function forward(
       // never overrides an explicit instruction, and so the log can say who chose the level.
       const clientEffort = clientEffortOf(body, clientKind);
       if (wire === "anthropic" && bridgeToAnthropic) {
+        // Responses clients fold through Chat Completions first (same two-hop as
+        // Responses→Antigravity), then chatToAnthropic builds the Messages body.
+        const chatBody =
+          clientKind === "responses" ? responsesToChatRequest(body, decision.model) : body;
         return withEffort(
-          { ...chatToAnthropic(body), model: decision.model, stream: upstreamStream },
+          { ...chatToAnthropic(chatBody), model: decision.model, stream: upstreamStream },
           decision.effort,
           "anthropic",
           clientEffort,
@@ -931,8 +985,50 @@ async function forward(
       });
     }
 
-    // Follow the wire the upstream actually answered on.
-    if (upstreamKind === "anthropic" && clientKind === "openai" && provider.type === "both") {
+    // Follow the wire the upstream actually answered on. `bridgeToAnthropic` covers
+    // both dual-wire hosts (Claude on OpenCode) and Anthropic-only OAuth subscriptions.
+    // Responses clients take a second hop: Anthropic → Chat Completions → Responses.
+    if (
+      upstreamKind === "anthropic" &&
+      bridgeToAnthropic &&
+      (clientKind === "openai" || clientKind === "responses")
+    ) {
+      if (clientKind === "responses") {
+        if (!upstreamStream) {
+          const json = (await upstream.json()) as Record<string, unknown>;
+          const usage = anthropicUsage(json.usage);
+          const cost = costOf(decision.model, usage, new Date(), decision.provider);
+          record(meta, 200, usage, cost.usd, cost.known);
+          return c.json(
+            chatJsonToResponse(anthropicToChat(json, decision.model), {
+              model: decision.model,
+              session: decision.session,
+              started,
+              usage,
+            }),
+            200,
+            decisionHeaders(decision),
+          );
+        }
+        const usage = emptyUsage();
+        const toChat = anthropicToChatStream(decision.model, (finalUsage) => {
+          Object.assign(usage, finalUsage);
+        });
+        const toResponses = chatToResponsesStream(decision.model, (result) => {
+          Object.assign(usage, result.usage);
+          const cost = costOf(decision.model, usage, new Date(), decision.provider);
+          record(meta, 200, usage, cost.usd, cost.known);
+        });
+        const streamBody = upstream.body?.pipeThrough(toChat).pipeThrough(toResponses) ?? null;
+        return new Response(streamBody, {
+          status: 200,
+          headers: {
+            "content-type": "text/event-stream",
+            "cache-control": "no-store",
+            ...decisionHeaders(decision),
+          },
+        });
+      }
       if (!upstreamStream) {
         const json = (await upstream.json()) as Record<string, unknown>;
         const usage = anthropicUsage(json.usage);
@@ -1066,45 +1162,13 @@ async function forward(
         const usage = openaiUsage(json.usage);
         const cost = costOf(decision.model, usage, new Date(), decision.provider);
         record(meta, 200, usage, cost.usd, cost.known);
-        const choice = asRecord(asRecord((json.choices as unknown[])?.[0]).message);
-        const toolCalls = Array.isArray(choice.tool_calls) ? choice.tool_calls : [];
-        const output: unknown[] = [];
-        if (typeof choice.content === "string" && choice.content.length > 0) {
-          output.push({
-            type: "message",
-            role: "assistant",
-            content: [{ type: "output_text", text: choice.content }],
-          });
-        }
-        for (const raw of toolCalls) {
-          const call = asRecord(raw);
-          const fn = asRecord(call.function);
-          const callId =
-            typeof call.id === "string" && call.id.length > 0
-              ? call.id
-              : `call_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
-          output.push({
-            type: "function_call",
-            call_id: callId,
-            name: asString(fn.name),
-            arguments: typeof fn.arguments === "string" ? fn.arguments : "",
-          });
-        }
         return c.json(
-          {
-            id: `resp_${decision.session.slice(0, 16)}`,
-            object: "response",
-            created_at: Math.floor(started / 1000),
-            status: "completed",
+          chatJsonToResponse(json, {
             model: decision.model,
-            output,
-            usage: {
-              input_tokens: usage.input,
-              output_tokens: usage.output,
-              total_tokens: usage.input + usage.output,
-              input_tokens_details: { cached_tokens: usage.cacheRead },
-            },
-          },
+            session: decision.session,
+            started,
+            usage,
+          }),
           200,
           decisionHeaders(decision),
         );

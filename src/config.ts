@@ -44,6 +44,45 @@ export interface Provider {
   models: ModelEntry[];
   injectStreamUsage: boolean;
   headers?: Record<string, string>;
+  /**
+   * Background discovery opt-in/out. Explicit `false` always skips; explicit `true` always
+   * syncs. When absent, only native OAuth subscription sources (Codex, Claude Code,
+   * Antigravity) sync — those catalogs are the intended full list. API keys and reseller
+   * subscriptions keep a curated picker until the operator turns sync on.
+   */
+  syncModels?: boolean;
+  /**
+   * Model ids discovery must never re-add. Removing an id from `models` is otherwise temporary:
+   * the next sync would see it as new and append it again, so a deliberate removal is recorded
+   * here instead.
+   */
+  excludeModels?: string[];
+}
+
+/**
+ * Whether background discovery may append this provider's newly released models.
+ * See `Provider.syncModels` for the absent / true / false rules.
+ */
+export function providerSyncsModels(provider: Provider): boolean {
+  if (provider.syncModels === false) return false;
+  if (provider.syncModels === true) return true;
+  return providerSyncsByDefault(provider);
+}
+
+/**
+ * OAuth sources whose discovered catalog is the intended full list, so they sync without an
+ * explicit `syncModels`. Exposed to the dashboard so the form's default is not a second copy.
+ */
+export const MODEL_SYNC_DEFAULT_SOURCES: readonly OAuthSource[] = [
+  "codex",
+  "claude-code",
+  "antigravity",
+];
+
+export function providerSyncsByDefault(provider: Pick<Provider, "oauthSource">): boolean {
+  return (
+    provider.oauthSource !== undefined && MODEL_SYNC_DEFAULT_SOURCES.includes(provider.oauthSource)
+  );
 }
 
 export function modelIdOf(entry: ModelEntry): string {
@@ -58,6 +97,60 @@ export function providerModelIds(provider: Provider): string[] {
 
 export function providerHasModel(provider: Provider, model: string): boolean {
   return providerModelIds(provider).includes(model);
+}
+
+/**
+ * Append discovered model ids to a provider without dropping anything already configured.
+ * Discovery can only add: an id already present keeps its position and its per-model wire pin,
+ * and an id named in `excludeModels` is never re-added — so a manual removal sticks instead of
+ * being undone by the next sync.
+ */
+export function appendDiscoveredModels(
+  provider: Provider,
+  discovered: string[],
+): { provider: Provider; added: string[] } {
+  const known = new Set(providerModelIds(provider));
+  const excluded = new Set(provider.excludeModels ?? []);
+  const added: string[] = [];
+  for (const raw of discovered) {
+    const id = raw.trim();
+    if (id.length === 0 || known.has(id) || excluded.has(id)) continue;
+    known.add(id);
+    added.push(id);
+  }
+  if (added.length === 0) return { provider, added };
+  return {
+    provider: { ...provider, models: [...provider.models, ...added.map((id) => ({ id }))] },
+    added,
+  };
+}
+
+/**
+ * Keep deliberate removals sticky across discovery. Ids dropped from `models` join
+ * `excludeModels`; ids that are selected again leave the exclusion list so a later
+ * sync can stop treating them as banned.
+ */
+export function reconcileExcludeModels(
+  previous: Provider | undefined,
+  nextModelIds: string[],
+  explicit?: string[],
+): string[] | undefined {
+  const selected = new Set(nextModelIds);
+  const excluded = new Set<string>();
+  if (explicit) {
+    for (const raw of explicit) {
+      const id = raw.trim();
+      if (id.length > 0 && !selected.has(id)) excluded.add(id);
+    }
+  } else {
+    for (const id of previous?.excludeModels ?? []) {
+      if (!selected.has(id)) excluded.add(id);
+    }
+    for (const id of previous ? providerModelIds(previous) : []) {
+      if (!selected.has(id)) excluded.add(id);
+    }
+  }
+  return excluded.size > 0 ? [...excluded] : undefined;
 }
 
 /** Build model entries from bare ids (tests and CLI helpers). */
@@ -276,6 +369,39 @@ export const DEFAULT_TUNNEL: TunnelConfig = {
   provider: "cloudflare",
 };
 
+/**
+ * Background discovery of provider model lists. A vendor ships a new model id and the agent's
+ * config still names yesterday's list, so the turn never reaches the new model until someone
+ * re-runs setup. This appends what discovery finds; it never removes or reorders.
+ */
+export interface ModelSyncConfig {
+  enabled: boolean;
+  /** Minutes between discovery passes. Clamped to at least 15. */
+  intervalMinutes: number;
+}
+
+export const DEFAULT_MODEL_SYNC: ModelSyncConfig = {
+  enabled: true,
+  intervalMinutes: 12 * 60,
+};
+
+export const MIN_MODEL_SYNC_INTERVAL_MINUTES = 15;
+
+export function parseModelSync(raw: unknown): ModelSyncConfig {
+  const value =
+    raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const intervalMinutes = value.intervalMinutes;
+  return {
+    enabled: value.enabled !== false,
+    // An out-of-range number is a too-eager setting, not a missing one: clamp it rather than
+    // silently jumping back to the 12h default.
+    intervalMinutes:
+      typeof intervalMinutes === "number" && Number.isFinite(intervalMinutes)
+        ? Math.max(MIN_MODEL_SYNC_INTERVAL_MINUTES, Math.floor(intervalMinutes))
+        : DEFAULT_MODEL_SYNC.intervalMinutes,
+  };
+}
+
 export interface Config {
   listen: { host: string; port: number };
   defaultProvider?: string;
@@ -283,6 +409,7 @@ export interface Config {
   modelAliases?: Record<string, string[]>;
   tunnel: TunnelConfig;
   routing: RoutingConfig;
+  modelSync: ModelSyncConfig;
 }
 
 export const DEFAULT_QUOTA_GUARD: QuotaGuardConfig = {
@@ -437,6 +564,7 @@ function parseProvider(raw: unknown, index: number): Provider {
   const auth: ProviderAuth = value.auth === "oauth" ? "oauth" : "api-key";
   const oauthSource = auth === "oauth" ? parseOAuthSource(value.oauthSource) : undefined;
   const quota = parseQuota(value.quota);
+  const excludeModels = stringArray(value.excludeModels);
   return {
     name,
     type,
@@ -450,6 +578,12 @@ function parseProvider(raw: unknown, index: number): Provider {
     models: parseModelEntries(value.models),
     injectStreamUsage: value.injectStreamUsage !== false,
     ...(headers ? { headers } : {}),
+    ...(value.syncModels === false
+      ? { syncModels: false }
+      : value.syncModels === true
+        ? { syncModels: true }
+        : {}),
+    ...(excludeModels.length > 0 ? { excludeModels } : {}),
   };
 }
 
@@ -687,6 +821,7 @@ export function parseConfig(raw: unknown): Config {
     ...(Object.keys(modelAliases).length > 0 ? { modelAliases } : {}),
     tunnel,
     routing: parseRouting(value.routing),
+    modelSync: parseModelSync(value.modelSync),
   };
 }
 
@@ -736,6 +871,7 @@ export function writeExampleConfig(): string {
       brains: [],
       brainPicksEffort: true,
     },
+    modelSync: { enabled: true, intervalMinutes: 720 },
   };
   writeFileSync(path, `${JSON.stringify(example, null, 2)}\n`);
   return path;

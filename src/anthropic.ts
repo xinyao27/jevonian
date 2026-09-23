@@ -1,5 +1,11 @@
+import { createHash } from "node:crypto";
+
 import type { Usage } from "./pricing";
 import { splitSseEvents } from "./responses";
+
+/** Anthropic rejects `tool_use.id` / `tool_result.tool_use_id` outside this charset. */
+const ANTHROPIC_TOOL_ID = /^[a-zA-Z0-9_-]+$/;
+const MAX_ANTHROPIC_TOOL_ID_LENGTH = 64;
 
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
@@ -7,6 +13,27 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+/**
+ * Map OpenAI / Responses call ids onto Anthropic's `^[a-zA-Z0-9_-]+$` charset.
+ * Deterministic so a tool_use and its tool_result stay paired after sanitization. Any id that
+ * had to change carries a hash of the original: stripping punctuation alone would fold
+ * `call:a` and `call.a` onto one id, and Anthropic rejects duplicate `tool_use` ids in a turn.
+ */
+export function anthropicToolId(raw: unknown): string {
+  const id = asString(raw);
+  if (ANTHROPIC_TOOL_ID.test(id) && id.length <= MAX_ANTHROPIC_TOOL_ID_LENGTH) return id;
+  const hash = createHash("sha256")
+    .update(id.length > 0 ? id : "empty", "utf8")
+    .digest("hex");
+  const sanitized = id
+    .replace(/[^a-zA-Z0-9_-]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "");
+  if (sanitized.length === 0) return `tool_${hash.slice(0, 24)}`;
+  const suffix = `_${hash.slice(0, 8)}`;
+  return `${sanitized.slice(0, MAX_ANTHROPIC_TOOL_ID_LENGTH - suffix.length)}${suffix}`;
 }
 
 function number(value: unknown): number {
@@ -102,7 +129,7 @@ export function chatToAnthropic(body: Record<string, unknown>): Record<string, u
       push("user", [
         {
           type: "tool_result",
-          tool_use_id: asString(message.tool_call_id),
+          tool_use_id: anthropicToolId(message.tool_call_id),
           content: toolResultContent(message.content),
         },
       ]);
@@ -118,7 +145,7 @@ export function chatToAnthropic(body: Record<string, unknown>): Record<string, u
         const fn = asRecord(call.function);
         blocks.push({
           type: "tool_use",
-          id: asString(call.id),
+          id: anthropicToolId(call.id),
           name: asString(fn.name),
           input: parseArgs(fn.arguments),
         });

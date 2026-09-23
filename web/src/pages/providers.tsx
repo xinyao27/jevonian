@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/table";
 import {
   api,
+  type ModelSyncResponse,
   type PresetView,
   type PriceInfo,
   type ProviderAuthView,
@@ -74,6 +75,10 @@ export function ProvidersPage() {
   const [prices, setPrices] = useState<Record<string, PriceInfo>>({});
   const [filter, setFilter] = useState("");
   const [customModel, setCustomModel] = useState("");
+  // `null` = no override: follow the server's OAuth-source default. Only an explicit choice that
+  // differs from that default is persisted, so saving a form never pins the default by accident.
+  const [syncOverride, setSyncOverride] = useState<boolean | null>(null);
+  const [modelSync, setModelSync] = useState<ModelSyncResponse | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -106,10 +111,15 @@ export function ProvidersPage() {
 
   const load = useCallback(async () => {
     try {
-      const [nextState, nextQuotas] = await Promise.all([api.state(), api.quota()]);
+      const [nextState, nextQuotas, nextSync] = await Promise.all([
+        api.state(),
+        api.quota(),
+        api.modelSync(),
+      ]);
       setState(nextState);
       setQuotas(nextQuotas.quotas);
       setHealth(nextQuotas.health);
+      setModelSync(nextSync);
     } catch (cause) {
       setError(String(cause));
     }
@@ -137,6 +147,7 @@ export function ProvidersPage() {
     setSelected([]);
     setFilter("");
     setCustomModel("");
+    setSyncOverride(null);
     setEditing(null);
     setMessage("");
     setError("");
@@ -200,6 +211,9 @@ export function ProvidersPage() {
           ? "gemini"
           : undefined;
   const effectiveType = lockedType ?? type;
+  const syncDefault =
+    auth === "oauth" && (state?.modelSyncDefaultSources ?? []).includes(oauthSource);
+  const syncModels = syncOverride ?? syncDefault;
 
   async function discover() {
     setBusy(true);
@@ -264,6 +278,7 @@ export function ProvidersPage() {
         billing,
         quota: Object.keys(quota).length > 0 ? quota : undefined,
         models: selected,
+        syncModels: syncOverride,
       });
       setMessage(`Saved provider "${name}"`);
       resetForm(presetId);
@@ -307,6 +322,40 @@ export function ProvidersPage() {
     }
   }
 
+  async function toggleModelSync(enabled: boolean) {
+    setBusy(true);
+    setError("");
+    try {
+      setModelSync(await api.saveModelSync({ enabled }));
+      setMessage(enabled ? "Model auto-sync enabled" : "Model auto-sync disabled");
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runModelSyncNow() {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = await api.runModelSync();
+      setModelSync(result);
+      const added = result.result?.added ?? 0;
+      setMessage(
+        added > 0
+          ? `Synced models: +${added} appended to provider lists`
+          : "Model lists are already up to date",
+      );
+      await load();
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function edit(provider: {
     name: string;
     type: string;
@@ -317,6 +366,7 @@ export function ProvidersPage() {
     billing?: ProviderBillingView;
     quota?: { fiveHourUsd?: number; weeklyUsd?: number; monthlyUsd?: number };
     models: string[];
+    syncModels?: boolean;
   }) {
     setPresetId("custom");
     setName(provider.name);
@@ -332,6 +382,7 @@ export function ProvidersPage() {
     setQuotaMonthly(provider.quota?.monthlyUsd ? String(provider.quota.monthlyUsd) : "");
     setDiscovered([]);
     setSelected(provider.models);
+    setSyncOverride(typeof provider.syncModels === "boolean" ? provider.syncModels : null);
     setEditing(provider.name);
     setFormOpen(true);
     setMessage("");
@@ -367,6 +418,53 @@ export function ProvidersPage() {
           on this machine.
         </p>
       </div>
+
+      <Card>
+        <CardHeader className="flex-row items-start justify-between gap-4 space-y-0">
+          <div className="flex flex-col gap-1">
+            <CardTitle>Model auto-sync</CardTitle>
+            <CardDescription>
+              While <code>serve</code> is running, Jevonian periodically discovers each
+              provider&apos;s model list and appends new ids. Removals stick; fixed routings are
+              never rewritten.
+            </CardDescription>
+          </div>
+          <Badge variant={modelSync?.config.enabled === false ? "outline" : "secondary"}>
+            {modelSync?.config.enabled === false ? "off" : "on"}
+          </Badge>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <p className="text-xs text-muted-foreground">
+            {modelSync?.lastCheckedAt
+              ? `Last check ${new Date(modelSync.lastCheckedAt).toLocaleString()} · +${modelSync.lastAdded} last pass`
+              : "No sync has run yet — start serve or Sync now."}
+            {modelSync && modelSync.providersSkipped.length > 0
+              ? ` · not syncing: ${modelSync.providersSkipped.join(", ")}`
+              : ""}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void toggleModelSync(!(modelSync?.config.enabled !== false))}
+              disabled={busy}
+            >
+              {modelSync?.config.enabled === false ? "Enable" : "Disable"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void runModelSyncNow()}
+              disabled={busy}
+            >
+              Sync now
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {!formOpen && message ? <p className="text-sm text-muted-foreground">{message}</p> : null}
+      {!formOpen && error ? <p className="text-sm text-destructive">{error}</p> : null}
 
       <Card>
         <CardHeader className="flex-row items-start justify-between gap-4">
@@ -749,6 +847,27 @@ export function ProvidersPage() {
                   Add
                 </Button>
               </div>
+
+              <label className="flex cursor-pointer items-start gap-3 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={syncModels}
+                  onChange={(event) =>
+                    setSyncOverride(
+                      event.target.checked === syncDefault ? null : event.target.checked,
+                    )
+                  }
+                />
+                <span>
+                  <span className="font-medium">Auto-sync new models</span>
+                  <span className="block text-xs text-muted-foreground">
+                    Append ids this provider newly lists. On by default for Codex, Claude Code, and
+                    Antigravity; off for API/reseller catalogs until you enable it. Unchecking a
+                    model remembers the removal so sync does not bring it back.
+                  </span>
+                </span>
+              </label>
             </div>
 
             {billing === "subscription" ? (

@@ -55,6 +55,17 @@ describe("providerSpeaks vs canServeClient", () => {
     expect(providerSpeaks(both, "openai")).toBe(true);
     expect(providerSpeaks(both, "anthropic")).toBe(true);
     expect(canServeClient(both, "anthropic")).toBe(true);
+
+    const claudeSub = provider({
+      name: "claude-subscription",
+      type: "anthropic",
+      baseUrl: "https://api.anthropic.com/v1",
+    });
+    expect(providerSpeaks(claudeSub, "openai")).toBe(false);
+    expect(providerSpeaks(claudeSub, "anthropic")).toBe(true);
+    expect(canServeClient(claudeSub, "openai")).toBe(true);
+    expect(canServeClient(claudeSub, "anthropic")).toBe(true);
+    expect(canServeClient(claudeSub, "responses")).toBe(true);
   });
 });
 
@@ -112,6 +123,48 @@ describe("planUpstreamWire", () => {
         models: modelEntries("claude-sonnet-4-5"),
       }),
       client: "openai",
+      model: "claude-sonnet-4-5",
+    });
+    expect(plan).toEqual({ wire: "anthropic", bridge: "to-anthropic" });
+  });
+
+  it("bridges OpenAI chat clients onto Anthropic-only subscription hosts", () => {
+    const plan = planUpstreamWire({
+      provider: provider({
+        name: "claude-subscription",
+        type: "anthropic",
+        baseUrl: "https://api.anthropic.com/v1",
+        models: modelEntries("claude-sonnet-4-6"),
+      }),
+      client: "openai",
+      model: "claude-sonnet-4-6",
+    });
+    expect(plan).toEqual({ wire: "anthropic", bridge: "to-anthropic" });
+  });
+
+  it("bridges Responses clients onto Anthropic-only subscription hosts", () => {
+    const plan = planUpstreamWire({
+      provider: provider({
+        name: "claude-subscription",
+        type: "anthropic",
+        baseUrl: "https://api.anthropic.com/v1",
+        models: modelEntries("claude-sonnet-4-6"),
+      }),
+      client: "responses",
+      model: "claude-sonnet-4-6",
+    });
+    expect(plan).toEqual({ wire: "anthropic", bridge: "to-anthropic" });
+  });
+
+  it("bridges Responses clients onto Claude models on dual-wire hosts", () => {
+    const plan = planUpstreamWire({
+      provider: provider({
+        name: "opencode-go",
+        type: "both",
+        baseUrl: "https://opencode.ai/zen/go/v1",
+        models: modelEntries("claude-sonnet-4-5"),
+      }),
+      client: "responses",
       model: "claude-sonnet-4-5",
     });
     expect(plan).toEqual({ wire: "anthropic", bridge: "to-anthropic" });
