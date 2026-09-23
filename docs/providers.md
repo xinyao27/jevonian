@@ -77,7 +77,7 @@ A subscription provider in `~/.config/jevonian/config.json`:
 
 The Overview and Providers pages show, per provider, the rolling windows, remaining quota, reset times, and local spend. Sources, in order:
 
-1. **Live** — vendor usage endpoints: OpenCode Go (`GET {baseUrl}/usage`), Claude (`GET https://api.anthropic.com/api/oauth/usage`), Codex (`GET https://chatgpt.com/backend-api/wham/usage`). Fetches are cached (Claude for 5 minutes, everything else for 1 minute) and refreshed with `jevonian quota --refresh` or the dashboard button.
+1. **Live** — vendor usage endpoints: OpenCode Go (`GET {baseUrl}/usage`), Claude (`GET https://api.anthropic.com/api/oauth/usage`), Codex (`GET https://chatgpt.com/backend-api/wham/usage`). Fetches are cached (Claude for 5 minutes, everything else for 1 minute) and refreshed with `jevonian quota --refresh` or the dashboard button. Claude reports its shared 5h/7d pools plus any model-scoped weekly limits (for example a Fable-only window); scoped windows are shown for visibility but never drive the quota guard, since a spent scoped pool says nothing about the rest of the account.
 2. **Response headers** — `anthropic-ratelimit-unified-*` and `x-codex-*` headers captured passively from every proxied response, persisted at `~/.local/share/jevonian/quota.json`.
 3. **Ledger** — dollar windows computed from the local ledger when a provider declares caps (`quota.fiveHourUsd` / `weeklyUsd` / `monthlyUsd`). Useful for Command Code and any subscription without a usage API.
 

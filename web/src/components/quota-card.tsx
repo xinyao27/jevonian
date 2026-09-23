@@ -55,7 +55,14 @@ export function QuotaWindowRow({ window }: { window: QuotaWindow }) {
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-baseline justify-between text-xs">
-        <span className="font-medium">{window.label}</span>
+        <span className="flex items-baseline gap-1.5">
+          <span className="font-medium">{window.label}</span>
+          {window.model ? (
+            <span className="text-[10px] tracking-wide text-muted-foreground uppercase">
+              model
+            </span>
+          ) : null}
+        </span>
         <span className="text-muted-foreground">
           {usedLabel(window)}
           {remainingLabel(window) ? ` · ${remainingLabel(window)}` : ""}

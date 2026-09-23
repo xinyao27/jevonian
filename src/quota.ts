@@ -16,6 +16,11 @@ export interface QuotaWindow {
   limitUsd?: number;
   resetsAt?: string;
   status?: string;
+  /**
+   * Model name when the window meters a single model instead of the whole account.
+   * See {@link providerQuotaHealth} for why these are held out of provider status.
+   */
+  model?: string;
 }
 
 export interface ProviderSpend {
@@ -855,6 +860,38 @@ async function opencodeGoUsage(
   return { windows };
 }
 
+/**
+ * Model-scoped weekly limits, e.g. the "Fable" window a subscription tracks
+ * separately from the shared 5h/7d pool.
+ *
+ * The endpoint reports these only inside the `limits` array, each tagged with
+ * `scope.model.display_name`; the top-level `five_hour` / `seven_day` objects
+ * carry the unscoped pools. Unscoped entries (`scope: null`) duplicate those two
+ * and are skipped so they are not shown twice.
+ */
+function claudeScopedWindows(raw: unknown): QuotaWindow[] {
+  if (!Array.isArray(raw)) return [];
+  const windows: QuotaWindow[] = [];
+  for (const entry of raw) {
+    const limit = asRecord(entry);
+    const model = asRecord(asRecord(limit.scope).model);
+    const label = typeof model.display_name === "string" ? model.display_name.trim() : "";
+    if (label.length === 0) continue;
+    const usedPercent = percentPoints(limit.percent);
+    if (usedPercent === undefined) continue;
+    const id = typeof model.id === "string" && model.id.length > 0 ? model.id : label.toLowerCase();
+    const resetsAt = toIso(limit.resets_at);
+    windows.push({
+      id: `scoped-${id}`,
+      label,
+      model: label,
+      usedPercent,
+      ...(resetsAt ? { resetsAt } : {}),
+    });
+  }
+  return windows;
+}
+
 async function claudeUsage(
   provider: Provider,
 ): Promise<{ windows: QuotaWindow[] } | { error: string }> {
@@ -889,6 +926,7 @@ async function claudeUsage(
       ...(resetsAt ? { resetsAt } : {}),
     });
   }
+  windows.push(...claudeScopedWindows(json.limits));
   return { windows };
 }
 
@@ -1073,8 +1111,13 @@ export function providerQuotaHealth(
   const lowPercent = options.lowPercent ?? DEFAULT_LOW_PERCENT;
   const spend = spendOf(ledgerRecords(now), provider.name);
   const known = knownWindows(provider, now, spend);
+  // Model-scoped windows meter one model on top of the shared pool. They must not drop the
+  // provider from routing: a spent Fable window says nothing about whether other Claude
+  // models still have headroom. Fall back to them only when they are the sole signal.
+  const account = known.windows.filter((window) => window.model === undefined);
+  const pooled = account.length > 0 ? account : known.windows;
   let worst: QuotaWindow | undefined;
-  for (const window of known.windows) {
+  for (const window of pooled) {
     if (window.resetsAt) {
       const resets = Date.parse(window.resetsAt);
       if (!Number.isNaN(resets) && resets <= now) continue;

@@ -705,6 +705,99 @@ describe("quota headers", () => {
     expect(providerQuotaHealth(config.providers[0]!).status).toBe("ok");
   });
 
+  function claudeConfig() {
+    const authPath = join(dir, "claude-credentials.json");
+    writeFileSync(
+      authPath,
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "claude-test-token",
+          expiresAt: Date.now() + 3_600_000,
+        },
+      }),
+    );
+    vi.stubEnv("JEVONIAN_CLAUDE_CREDENTIALS", authPath);
+    return parseConfig({
+      providers: [
+        {
+          name: "claude-subscription",
+          type: "anthropic",
+          baseUrl: "https://api.anthropic.com",
+          auth: "oauth",
+          oauthSource: "claude-code",
+          billing: "subscription",
+          models: ["claude-sonnet-4-6"],
+        },
+      ],
+    });
+  }
+
+  it("reads Claude model-scoped windows alongside the shared 5h/7d pools", async () => {
+    const config = claudeConfig();
+    let requestedUrl = "";
+    vi.stubGlobal("fetch", async (url: string) => {
+      requestedUrl = url;
+      return new Response(
+        JSON.stringify({
+          five_hour: { utilization: 100, resets_at: "2026-09-23T06:49:59+00:00" },
+          seven_day: { utilization: 17, resets_at: "2026-09-24T16:59:59+00:00" },
+          limits: [
+            { kind: "session", percent: 100, scope: null },
+            { kind: "weekly_all", percent: 17, scope: null },
+            {
+              kind: "weekly_scoped",
+              percent: 42,
+              resets_at: "2026-09-24T17:00:00+00:00",
+              scope: { model: { id: null, display_name: "Fable" } },
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    });
+
+    const quotas = await providerQuotas(config, { refresh: true });
+    expect(requestedUrl).toBe("https://api.anthropic.com/api/oauth/usage");
+    expect(quotas[0]?.source).toBe("live");
+    // Unscoped `limits` entries duplicate five_hour / seven_day and must not repeat.
+    expect(quotas[0]?.windows.map((window) => window.label)).toEqual(["5h", "7d", "Fable"]);
+    expect(quotas[0]?.windows[2]).toEqual({
+      id: "scoped-fable",
+      label: "Fable",
+      model: "Fable",
+      usedPercent: 42,
+      resetsAt: "2026-09-24T17:00:00.000Z",
+    });
+  });
+
+  it("does not mark a provider exhausted from a spent model-scoped window", async () => {
+    const config = claudeConfig();
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(
+          JSON.stringify({
+            five_hour: { utilization: 10 },
+            seven_day: { utilization: 17 },
+            limits: [
+              {
+                kind: "weekly_scoped",
+                percent: 100,
+                scope: { model: { display_name: "Fable" } },
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+    );
+
+    const quotas = await providerQuotas(config, { refresh: true });
+    expect(quotas[0]?.windows.map((window) => window.label)).toEqual(["5h", "7d", "Fable"]);
+    // The scoped pool is a supplementary limit, so the shared pool still governs routing.
+    expect(providerQuotaHealth(config.providers[0]!).status).toBe("ok");
+    expect(providerQuotaHealth(config.providers[0]!).window).toBe("7d");
+  });
+
   it("reads DeepSeek, OpenRouter, and Moonshot balances", async () => {
     const config = parseConfig({
       providers: [
