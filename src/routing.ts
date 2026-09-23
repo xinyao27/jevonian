@@ -1,5 +1,5 @@
 import { saveBody } from "./bodies";
-import { askJev, type BrainVerdict } from "./brain";
+import { askJev, consumeAskJevFailure, type BrainVerdict } from "./brain";
 import {
   clampEffort,
   effectiveCapabilities,
@@ -25,7 +25,8 @@ import { benchmarkFocusFor, benchmarksCoverageOf, leaderboardViewFor } from "./l
 import { appendRecord } from "./ledger";
 import { canonicalVariants } from "./models";
 import { costOf, isDeepSeekPeak, priceFor, type Usage } from "./pricing";
-import { providerQuotaHealth, type QuotaStatus } from "./quota";
+import { captureUsageLimit, providerQuotaHealth, type QuotaStatus } from "./quota";
+import { configuredRetries, withRetry } from "./retry";
 import { sessionFingerprint } from "./session";
 import { canServeClient } from "./wire";
 
@@ -411,6 +412,19 @@ function recentMessages(
   return out.slice(-limit);
 }
 
+/**
+ * Shell-like tools. Their arguments routinely contain `; curl …` / heredocs / pipes that
+ * Cloudflare WAF in front of TypeSafe treats as an exploit, returning a 403 HTML interstitial
+ * and collapsing every brain channel into "unavailable". The brain only needs the tool name
+ * to know work is in flight — raw commands are noise and a stability risk.
+ */
+const SHELL_TOOL_NAME = /^(shell|bash|local_shell)$/i;
+
+function formatToolCallForBrain(name: string, args: string): string {
+  if (SHELL_TOOL_NAME.test(name)) return `${name}(<command redacted>)`;
+  return `${name}(${args.slice(0, 80)})`;
+}
+
 function recentToolCalls(body: Record<string, unknown>, kind: RequestKind, limit = 3): string[] {
   const calls: string[] = [];
   const messages = Array.isArray(body.messages) ? body.messages : [];
@@ -423,8 +437,8 @@ function recentToolCalls(body: Record<string, unknown>, kind: RequestKind, limit
         const record = asRecord(block);
         if (record.type !== "tool_use") continue;
         const name = typeof record.name === "string" ? record.name : "tool";
-        const args = JSON.stringify(record.input ?? {}).slice(0, 80);
-        calls.push(`${name}(${args})`);
+        const args = JSON.stringify(record.input ?? {});
+        calls.push(formatToolCallForBrain(name, args));
       }
       continue;
     }
@@ -435,7 +449,7 @@ function recentToolCalls(body: Record<string, unknown>, kind: RequestKind, limit
       const name = typeof fn.name === "string" ? fn.name : "tool";
       const args =
         typeof fn.arguments === "string" ? fn.arguments : JSON.stringify(fn.arguments ?? {});
-      calls.push(`${name}(${args.slice(0, 80)})`);
+      calls.push(formatToolCallForBrain(name, args));
     }
   }
   // Responses shape (Codex and other /v1/responses clients): tool calls are top-level
@@ -446,12 +460,12 @@ function recentToolCalls(body: Record<string, unknown>, kind: RequestKind, limit
     if (item.type === "function_call") {
       const name = typeof item.name === "string" ? item.name : "tool";
       const args = typeof item.arguments === "string" ? item.arguments : "{}";
-      calls.push(`${name}(${args.slice(0, 80)})`);
+      calls.push(formatToolCallForBrain(name, args));
       continue;
     }
     if (item.type === "local_shell_call") {
       const action = asRecord(item.action);
-      calls.push(`shell(${JSON.stringify(action.command ?? "command").slice(0, 80)})`);
+      calls.push(formatToolCallForBrain("shell", JSON.stringify(action.command ?? "command")));
     }
   }
   return calls.slice(-limit);
@@ -533,7 +547,7 @@ export function lastUserMessage(body: Record<string, unknown>, kind: RequestKind
   return "";
 }
 
-export type BrainSource = "jev" | "jev-low-confidence";
+export type BrainSource = "jev" | "jev-low-confidence" | "heuristic";
 
 export interface RouteDecision {
   model: string;
@@ -1124,6 +1138,7 @@ function recordBrainCall(input: {
   state?: Record<string, unknown>;
   verdict: BrainVerdict | undefined;
   brain: BrainConfig;
+  error?: string;
 }): void {
   if (input.config.routing.mode !== "auto") return;
   const brain = input.brain;
@@ -1173,7 +1188,9 @@ function recordBrainCall(input: {
     pricingKnown: cost.known,
     kind: "brain",
     reason: "routing-brain",
-    ...(input.verdict ? {} : { error: "brain unavailable" }),
+    ...(input.verdict
+      ? {}
+      : { error: input.error?.trim() ? input.error : "brain unavailable" }),
   });
 }
 
@@ -1591,48 +1608,114 @@ export async function decideRoute(
 
   const wantsTranscript = brains.some((entry) => entry.fullPrompt === true);
   const transcript = wantsTranscript ? fullTranscript(body, kind) : undefined;
-  let best: { verdict: BrainVerdict; channel: string } | undefined;
+  // Walk every configured channel once per round. Channel order is failover (typesafe →
+  // openrouter), not a second opinion. When every channel fails, repeat the whole round with
+  // the same transient backoff as upstream calls — a brief brain outage used to 502 Cursor
+  // immediately, which freezes the agent behind a misleading "API key rate limit" toast.
+  //
+  // Non-retryable channel failures (402 billing, 403 WAF) are skipped for the rest of this
+  // turn so we do not hammer an empty OpenRouter key or a blocked TypeSafe payload.
+  const brainBudget = configuredRetries();
+  const skipChannels = new Set<string>();
   for (const entry of brains) {
-    const brainStarted = Date.now();
-    const ready: Record<string, unknown> = {
-      ...brainState,
-      routings: routingPayload,
-      // Keep a flat candidates list for older brain stubs / probes that still read it.
-      candidates: flatOffered,
-      ...(brainPicksEffort ? {} : { picks_effort: false }),
-    };
-    const state = entry.fullPrompt && transcript ? { ...ready, transcript } : ready;
-    const verdict = await askJev({
-      brain: entry,
-      state,
-      ...(brainPicksEffort ? {} : { modelOnly: true }),
-    });
-    recordBrainCall({
-      config,
-      session,
-      ...(input.requestId ? { requestId: input.requestId } : {}),
-      ...(input.keyId ? { keyId: input.keyId } : {}),
-      ...(input.keyName ? { keyName: input.keyName } : {}),
-      started: brainStarted,
-      state,
-      verdict,
-      brain: entry,
-    });
-    // Later channels exist for failover when this one is down — not for a second opinion
-    // when Jev is unsure. The same model asked four times only burns latency.
-    if (!verdict) continue;
-    const source: BrainSource =
-      verdict.confidence < entry.minConfidence ? "jev-low-confidence" : "jev";
-    applyVerdict(verdict, entry.channel, source);
-    if (source === "jev-low-confidence") reason = `${reason}:brain-low-confidence`;
-    best = { verdict, channel: entry.channel };
-    break;
+    // Same OpenRouter key often powers both the model provider and the brain channel. If the
+    // provider is already known spent, do not burn another 402 on the decisions endpoint.
+    const linked = config.providers.find((provider) => provider.name === entry.channel);
+    if (linked && providerQuotaHealth(linked, { lowPercent: guard.lowPercent, now }).status === "exhausted") {
+      skipChannels.add(entry.channel);
+    }
   }
+  let best = await withRetry(
+    async () => {
+      for (const entry of brains) {
+        if (skipChannels.has(entry.channel)) continue;
+        const brainStarted = Date.now();
+        const ready: Record<string, unknown> = {
+          ...brainState,
+          routings: routingPayload,
+          // Keep a flat candidates list for older brain stubs / probes that still read it.
+          candidates: flatOffered,
+          ...(brainPicksEffort ? {} : { picks_effort: false }),
+        };
+        const state = entry.fullPrompt && transcript ? { ...ready, transcript } : ready;
+        const verdict = await askJev({
+          brain: entry,
+          state,
+          ...(brainPicksEffort ? {} : { modelOnly: true }),
+        });
+        const failure = verdict ? undefined : consumeAskJevFailure();
+        recordBrainCall({
+          config,
+          session,
+          ...(input.requestId ? { requestId: input.requestId } : {}),
+          ...(input.keyId ? { keyId: input.keyId } : {}),
+          ...(input.keyName ? { keyName: input.keyName } : {}),
+          started: brainStarted,
+          state,
+          verdict,
+          brain: entry,
+          ...(failure?.error ? { error: failure.error } : {}),
+        });
+        if (!verdict) {
+          // 402 = no credits; 403 = WAF/auth. Retrying the same payload against the same
+          // host cannot recover within this turn.
+          if (failure?.status === 402 || failure?.status === 403) {
+            skipChannels.add(entry.channel);
+          }
+          if (failure?.status === 402) {
+            const linked = config.providers.find((provider) => provider.name === entry.channel);
+            if (linked) {
+              captureUsageLimit(linked, 402, failure.error);
+              console.warn(
+                `brain ${entry.channel}: billing exhausted — routing will skip provider "${linked.name}"`,
+              );
+            }
+          }
+          continue;
+        }
+        const source: BrainSource =
+          verdict.confidence < entry.minConfidence ? "jev-low-confidence" : "jev";
+        applyVerdict(verdict, entry.channel, source);
+        if (source === "jev-low-confidence") reason = `${reason}:brain-low-confidence`;
+        return { verdict, channel: entry.channel };
+      }
+      return undefined;
+    },
+    {
+      attempts: brainBudget + 1,
+      retryWhen: (outcome) => (outcome === undefined ? { status: 502 } : undefined),
+      onRetry: ({ attempt, delayMs }) => {
+        console.warn(
+          `brain unavailable retry ${attempt}/${brainBudget} in ${delayMs}ms: all ${brains.length} channel(s) failed`,
+        );
+      },
+    },
+  );
   if (!best) {
-    return {
-      error: `Jev brain unavailable: all ${brains.length} configured brain(s) failed.`,
-      status: 502,
+    // Prefer staying up over failing the agent. Cursor maps a brain 502 into a misleading
+    // "User Provided API Key Rate Limit Exceeded" toast that freezes the turn; a heuristic
+    // pick from classifyPhase is far cheaper than that. Channel failures are already in the
+    // ledger as /brain 502 rows.
+    const preferred =
+      offers.find((entry) => entry.id === signals.phase) ??
+      (signals.hasToolResults ? offers.find((entry) => entry.id === "execute") : undefined) ??
+      offers.find((entry) => entry.id === "plan") ??
+      offers[0];
+    if (!preferred?.candidates[0]) {
+      return {
+        error: `Jev brain unavailable: all ${brains.length} configured brain(s) failed.`,
+        status: 502,
+      };
+    }
+    console.warn(
+      `brain unavailable: falling back to heuristic routing "${preferred.id}" after ${brains.length} channel(s) failed`,
+    );
+    best = {
+      verdict: { model: preferred.id, confidence: 0 },
+      channel: "heuristic",
     };
+    applyVerdict(best.verdict, "heuristic", "heuristic");
+    reason = `brain-fallback:${preferred.id}`;
   }
 
   // The brain answers with a routing id; the model is the first healthy entry in that pool.

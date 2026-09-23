@@ -854,6 +854,36 @@ describe("quota headers", () => {
     expect(moonshot?.balance?.amount).toBeCloseTo(12.5);
   });
 
+  it("treats a $0 OpenRouter balance as exhausted for routing", async () => {
+    const config = parseConfig({
+      providers: [
+        {
+          name: "openrouter",
+          type: "both",
+          baseUrl: "https://openrouter.ai/api/v1",
+          apiKey: "test",
+          models: ["openrouter/auto"],
+        },
+      ],
+    });
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(JSON.stringify({ data: { total_credits: 10, total_usage: 10.5 } }), {
+          status: 200,
+        }),
+    );
+    await providerQuotas(config, { refresh: true });
+    const health = providerQuotaHealth(config.providers[0]!);
+    expect(health.status).toBe("exhausted");
+    expect(health.window).toBe("balance");
+    expect(headerQuotas().openrouter?.windows[0]).toMatchObject({
+      id: "balance",
+      usedPercent: 100,
+    });
+    vi.unstubAllGlobals();
+  });
+
   it("falls back to the ledger for subscription providers with caps", async () => {
     const config = parseConfig({
       providers: [

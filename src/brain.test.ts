@@ -219,12 +219,14 @@ describe("askJev", () => {
   });
 
   it("returns undefined on upstream errors", async () => {
+    process.env.JEVONIAN_UPSTREAM_RETRIES = "0";
     vi.stubGlobal("fetch", async () => new Response("nope", { status: 500 }));
     const verdict = await askJev({
       brain: { channel: "typesafe", timeoutMs: 1_000, minConfidence: 0.6 },
       state: {},
     });
     expect(verdict).toBeUndefined();
+    delete process.env.JEVONIAN_UPSTREAM_RETRIES;
   });
 
   it("posts to Cloudflare Workers AI with account id and an input wrapper", async () => {
@@ -280,6 +282,33 @@ describe("askJev", () => {
       apiKey: "cf-token",
     });
     expect(verdict).toBeUndefined();
+  });
+
+  it("retries a brain 429 before giving up", async () => {
+    process.env.JEVONIAN_UPSTREAM_RETRIES = "1";
+    process.env.TYPESAFE_API_KEY = "test-key";
+    let hits = 0;
+    vi.stubGlobal("fetch", async () => {
+      hits += 1;
+      if (hits === 1) return new Response("slow down", { status: 429 });
+      return new Response(
+        JSON.stringify({
+          model: "jev-1.13.0",
+          answers: { model: { choice: "execute", confidence: 0.9 } },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+
+    const verdict = await askJev({
+      brain: { channel: "typesafe", timeoutMs: 5_000, minConfidence: 0.6 },
+      state: { last_user_message: "hi" },
+      modelOnly: true,
+    });
+
+    expect(verdict?.model).toBe("execute");
+    expect(hits).toBe(2);
+    delete process.env.JEVONIAN_UPSTREAM_RETRIES;
   });
 });
 

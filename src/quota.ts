@@ -1023,6 +1023,24 @@ async function buildQuota(
           ...(live.plan ? { plan: live.plan } : {}),
         },
       });
+    } else if (live.balance && live.balance.amount <= 0) {
+      // Persist a synthetic rejection so routing keeps skipping this provider after the
+      // in-memory live cache expires — a $0 OpenRouter key must not re-enter the pool.
+      const current = headerQuotas();
+      saveHeaderQuotas({
+        ...current,
+        [provider.name]: {
+          windows: [
+            {
+              id: "balance",
+              label: "balance",
+              usedPercent: 100,
+              status: "rejected",
+            },
+          ],
+          fetchedAt: new Date().toISOString(),
+        },
+      });
     } else {
       clearRejection(provider.name);
     }
@@ -1111,6 +1129,35 @@ export function providerQuotaHealth(
   const lowPercent = options.lowPercent ?? DEFAULT_LOW_PERCENT;
   const spend = spendOf(ledgerRecords(now), provider.name);
   const known = knownWindows(provider, now, spend);
+  const cached = liveCache.get(provider.name);
+  const liveBalance =
+    cached && now - cached.at < liveTtl(provider) ? cached.quota.balance : undefined;
+
+  // Pay-as-you-go providers (OpenRouter, DeepSeek, …) often expose a remaining balance with
+  // no window. A $0 balance used to fall through as "unknown", so the quota guard kept sending
+  // traffic — and a empty OpenRouter key then 402'd every brain/model call that touched it.
+  if (liveBalance) {
+    if (liveBalance.amount <= 0) {
+      return {
+        provider: provider.name,
+        status: "exhausted",
+        usedPercent: 100,
+        remainingPercent: 0,
+        window: "balance",
+        remainingUsd: 0,
+        note: `balance ${liveBalance.amount} ${liveBalance.currency}`,
+      };
+    }
+    if (known.windows.length === 0) {
+      return {
+        provider: provider.name,
+        status: "ok",
+        remainingUsd: liveBalance.amount,
+        note: `balance ${liveBalance.amount} ${liveBalance.currency}`,
+      };
+    }
+  }
+
   // Model-scoped windows meter one model on top of the shared pool. They must not drop the
   // provider from routing: a spent Fable window says nothing about whether other Claude
   // models still have headroom. Fall back to them only when they are the sole signal.
@@ -1134,7 +1181,7 @@ export function providerQuotaHealth(
   const remainingUsd =
     worst.limitUsd !== undefined && worst.usedUsd !== undefined
       ? Math.max(0, worst.limitUsd - worst.usedUsd)
-      : undefined;
+      : liveBalance?.amount;
   let status: QuotaStatus =
     usedPercent >= 100 ? "exhausted" : remainingPercent < lowPercent ? "low" : "ok";
   if (remainingUsd !== undefined && avgRequestUsd !== undefined) {
@@ -1143,6 +1190,8 @@ export function providerQuotaHealth(
       status = "low";
     }
   }
+  // A live balance of ~$0 with still-open windows still means "do not spend here".
+  if (liveBalance && liveBalance.amount <= 0) status = "exhausted";
   const note =
     known.source === "ledger"
       ? "estimated from the local ledger"

@@ -234,7 +234,9 @@ describe("classifyPhase", () => {
       ],
     };
     const state = await brainStateFor(body, "responses");
-    expect(state.recent_tool_calls).toEqual(['shell({"command":"ls -la"})']);
+    // Shell args are redacted before they reach the brain — raw `; curl` patterns trip
+    // TypeSafe's Cloudflare WAF and take the whole router down.
+    expect(state.recent_tool_calls).toEqual(["shell(<command redacted>)"]);
   });
 
   it("classifies a fresh conversation as planning", async () => {
@@ -856,15 +858,51 @@ describe("decideRoute with the Jev brain", () => {
     delete process.env.JEV_TEST_BRAIN_KEY;
   });
 
-  it("errors when every brain fails instead of falling back to a default model", async () => {
+  it("falls back to heuristic routing when every brain fails", async () => {
+    // Disable retries so a permanently dead brain fails in one pass (no backoff sleep).
+    process.env.JEVONIAN_UPSTREAM_RETRIES = "0";
     vi.stubGlobal("fetch", async () => new Response("boom", { status: 500 }));
     const result = await decideRoute(jevInput());
-    expect("error" in result && result.error).toContain("Jev brain unavailable");
-    expect("error" in result && result.status).toBe(502);
+    // Soft-fail: keep the turn alive with classifyPhase rather than 502ing Cursor.
+    if ("error" in result) throw new Error(result.error);
+    expect(result.brain).toBe("heuristic");
+    expect(result.reason).toMatch(/^brain-fallback:/);
+    expect(result.phase).toBe("plan");
     vi.unstubAllGlobals();
     delete process.env.TYPESAFE_API_KEY;
+    delete process.env.JEVONIAN_UPSTREAM_RETRIES;
   });
 
+  it("retries the whole brain round when every channel fails once", async () => {
+    process.env.JEVONIAN_UPSTREAM_RETRIES = "1";
+    let hits = 0;
+    vi.stubGlobal("fetch", async () => {
+      hits += 1;
+      // Exhaust round 1's per-request retries (2 attempts with budget 1), then recover.
+      if (hits <= 2) return new Response("down", { status: 502 });
+      return new Response(
+        JSON.stringify({
+          model: "jev-1.13.0",
+          answers: { model: { choice: "execute", confidence: 0.9 } },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    const result = await decideRoute(jevInput());
+    if ("error" in result) throw new Error(result.error);
+    expect(result.brain).toBe("jev");
+    expect(hits).toBe(3);
+    const records = readFileSync(process.env.JEVONIAN_LEDGER ?? "", "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((record) => record.kind === "brain");
+    // Round 1 recorded a failed channel call; round 2 recorded the success.
+    expect(records.map((record) => record.status)).toEqual([502, 200]);
+    vi.unstubAllGlobals();
+    delete process.env.TYPESAFE_API_KEY;
+    delete process.env.JEVONIAN_UPSTREAM_RETRIES;
+  });
   it("falls back to the first candidate when the brain names an unknown model", async () => {
     vi.stubGlobal(
       "fetch",
@@ -990,7 +1028,7 @@ describe("protocol parity", () => {
       const state = await stateFor(kind);
       expect(state.last_user_message).toBe(ASK);
       expect(state.session_goal).toBe(ASK);
-      expect(state.recent_tool_calls).toEqual([`${TOOL}({"cmd":"npm test"})`]);
+      expect(state.recent_tool_calls).toEqual([`${TOOL}(<command redacted>)`]);
       expect(state.consecutive_failures).toBe(1);
       expect(String(state.recent_tool_results)).toContain("assert failed");
       expect(JSON.stringify(state.recent_messages)).not.toContain("OS Version");

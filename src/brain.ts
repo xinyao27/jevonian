@@ -2,7 +2,12 @@ import { withOpenRouterAttribution } from "./auth";
 import type { BrainConfig } from "./config";
 import { getCredential } from "./credentials";
 import type { Usage } from "./pricing";
-import { retryingFetch } from "./retry";
+import {
+  configuredRetries,
+  describeFailure,
+  isRetryableStatus,
+  withRetry,
+} from "./retry";
 
 export interface JevChannel {
   id: string;
@@ -116,6 +121,22 @@ export interface BrainVerdict {
   effortProbabilities?: Record<string, number>;
   modelName?: string;
   usage?: Usage;
+}
+
+/** Why askJev returned undefined — consumed by the router so a 402 can mark the provider spent. */
+export type AskJevFailure = { status?: number; error: string };
+
+let lastAskFailure: AskJevFailure | undefined;
+
+export function consumeAskJevFailure(): AskJevFailure | undefined {
+  const failure = lastAskFailure;
+  lastAskFailure = undefined;
+  return failure;
+}
+
+function failAsk(failure: AskJevFailure): undefined {
+  lastAskFailure = failure;
+  return undefined;
 }
 
 /** A one-off question shape, used when something other than model choice is being asked. */
@@ -406,9 +427,31 @@ export function normalizeEvaluationResult(result: EvaluationLike): Record<string
  * fails the whole turn before a model is even asked. Retrying is bounded by the caller's
  * timeout signal, so a brain that is genuinely down still fails at `timeoutMs` rather than
  * after the backoff.
+ *
+ * Unlike model upstream calls, a brain `429` is also retried here: there is no quota-failover
+ * path for the router itself, and Cursor maps a 502 "brain unavailable" into a misleading
+ * "API key rate limit" toast that freezes the agent. Waiting out a brief brain throttle is
+ * cheaper than failing the whole turn.
  */
 async function fetchBrain(url: string, init: RequestInit): Promise<Response> {
-  return retryingFetch(url, init, { label: "brain" });
+  const budget = configuredRetries();
+  return withRetry(() => fetch(url, init), {
+    attempts: budget + 1,
+    retryWhen: (response) => {
+      if (isRetryableStatus(response.status) || response.status === 429) {
+        return { status: response.status };
+      }
+      return undefined;
+    },
+    discard: async (response) => {
+      await response.body?.cancel();
+    },
+    onRetry: ({ attempt, delayMs, failure }) => {
+      console.warn(
+        `brain retry ${attempt}/${budget} in ${delayMs}ms: ${describeFailure(failure)}`,
+      );
+    },
+  });
 }
 
 async function askVercelGateway(
@@ -493,8 +536,9 @@ function verdictFromParsed(
 }
 
 export async function askJev(input: BrainInput): Promise<BrainVerdict | undefined> {
+  lastAskFailure = undefined;
   const transport = resolveTransport(input.brain, input.apiKey);
-  if (!transport) return undefined;
+  if (!transport) return failAsk({ error: "no credential" });
 
   if (input.brain.channel === "vercel") {
     return askVercelGateway(input, transport.apiKey);
@@ -503,7 +547,7 @@ export async function askJev(input: BrainInput): Promise<BrainVerdict | undefine
     return askCloudflareWorkersAi(input, transport.apiKey);
   }
   const { baseUrl, apiKey } = transport;
-  if (!baseUrl) return undefined;
+  if (!baseUrl) return failAsk({ error: "no endpoint" });
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), input.brain.timeoutMs);
@@ -518,13 +562,19 @@ export async function askJev(input: BrainInput): Promise<BrainVerdict | undefine
       }),
       signal: input.signal ?? controller.signal,
     });
-    if (!response.ok) return undefined;
+    if (!response.ok) {
+      // Surface the real status so serve.log shows "403/402" instead of a silent undefined.
+      // TypeSafe's Cloudflare WAF returns 403 HTML; OpenRouter returns 402 when credits are gone.
+      console.warn(`brain ${input.brain.channel} HTTP ${response.status}`);
+      await response.body?.cancel();
+      return failAsk({ status: response.status, error: `HTTP ${response.status}` });
+    }
     const payload = (await response.json()) as unknown;
     const parsed = parseSystemOneResponse(payload);
-    if (!parsed.model) return undefined;
+    if (!parsed.model) return failAsk({ error: "empty verdict" });
     return verdictFromParsed({ ...parsed, model: parsed.model });
-  } catch {
-    return undefined;
+  } catch (error) {
+    return failAsk({ error: error instanceof Error ? error.message : String(error) });
   } finally {
     clearTimeout(timer);
   }

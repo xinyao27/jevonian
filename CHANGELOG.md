@@ -9,6 +9,10 @@ All notable changes to this project are documented in this file.
 - Transient upstream failures are retried instead of failing the turn: a dropped socket, a DNS blip, or a gateway `500`/`502`/`503`/`504` during the model call is repeated up to twice (`250ms`→`500ms` with jitter). The routing brain call and OAuth token refreshes retry the same way, so one flaky link no longer costs a whole turn before a model is even asked. A recovered turn records `retries` in the ledger, returns `x-jevonian-retries`, and shows **network retries** in the log detail. Tune with `JEVONIAN_UPSTREAM_RETRIES` (`0` disables, capped at `5`). A `429` still goes to quota failover rather than being repeated against the same host, and a `4xx` is never retried.
 - Claude live quota now surfaces model-scoped weekly limits (for example a Fable-only window) alongside the shared 5h/7d pools. Scoped windows are labeled in the dashboard for visibility but never gate routing on their own — a spent scoped pool does not drop the rest of the Claude account.
 
+### Fixed
+
+- When every routing-brain channel fails at once, Jevonian now repeats the whole brain round with the same transient backoff instead of immediately returning `502 brain unavailable` to the client. A brief brain outage (or brain-side `429`) used to surface in Cursor as a misleading "User Provided API Key Rate Limit Exceeded" toast that froze the agent mid-turn. Watch `serve.log` for `brain unavailable retry …` / `brain retry …` lines. After retries are exhausted, the turn soft-falls back to `classifyPhase` heuristic routing (`brain-fallback:…`) rather than 502ing the agent. Shell tool arguments sent to the brain are redacted — raw `; curl …` snippets trip TypeSafe's Cloudflare WAF (403 HTML) and were collapsing both brain channels even when the key itself was fine. A live `$0` OpenRouter/DeepSeek balance is now treated as exhausted (and persisted), so routing and the OpenRouter brain channel stop calling a spent key; a brain `402` also marks the matching provider spent for the rest of the turn.
+
 ## [0.1.5] - 2026-09-23
 
 ### Added
