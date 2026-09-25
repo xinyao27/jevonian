@@ -162,7 +162,19 @@ export function chatToAnthropic(body: Record<string, unknown>): Record<string, u
     messages: converted,
     max_tokens: typeof max === "number" && max > 0 ? max : 4_096,
   };
-  if (systemTexts.length > 0) out.system = systemTexts.join("\n\n");
+  // Prompt caching: mark stable prefixes so Claude subscription turns reuse the
+  // system prompt, tool schemas, and conversation prefix across a long agent
+  // session. Anthropic allows up to four breakpoints; these three cover the
+  // usual Chat Completions shape without needing the client to opt in.
+  if (systemTexts.length > 0) {
+    out.system = [
+      {
+        type: "text",
+        text: systemTexts.join("\n\n"),
+        cache_control: { type: "ephemeral" },
+      },
+    ];
+  }
   if (typeof body.temperature === "number") out.temperature = body.temperature;
   if (typeof body.top_p === "number") out.top_p = body.top_p;
   const stop = body.stop;
@@ -172,9 +184,22 @@ export function chatToAnthropic(body: Record<string, unknown>): Record<string, u
     if (sequences.length > 0) out.stop_sequences = sequences;
   }
   const tools = chatToolsToAnthropic(body.tools);
-  if (tools) out.tools = tools;
+  if (tools) {
+    const last = tools[tools.length - 1] as Record<string, unknown>;
+    tools[tools.length - 1] = { ...last, cache_control: { type: "ephemeral" } };
+    out.tools = tools;
+  }
   const toolChoice = toolChoiceFor(body.tool_choice);
   if (toolChoice) out.tool_choice = toolChoice;
+  // Cache up through the last message block so growing agent history still hits
+  // the prefix written on the previous turn.
+  const lastMessage = converted[converted.length - 1];
+  if (lastMessage && lastMessage.content.length > 0) {
+    const blocks = lastMessage.content as Array<Record<string, unknown>>;
+    const lastBlock = blocks[blocks.length - 1];
+    if (lastBlock)
+      blocks[blocks.length - 1] = { ...lastBlock, cache_control: { type: "ephemeral" } };
+  }
   return out;
 }
 

@@ -372,7 +372,8 @@ describe("same-request quota failover", () => {
             type: "error",
             error: {
               type: "rate_limit_error",
-              message: "This request would exceed your account's rate limit. Please try again later.",
+              message:
+                "This request would exceed your account's rate limit. Please try again later.",
             },
           }),
           {

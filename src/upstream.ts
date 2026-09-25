@@ -84,6 +84,7 @@ import {
   type SessionStore,
 } from "./routing";
 import type { AppEnv } from "./server";
+import { streamWithKeepalive } from "./stream-keepalive";
 import { planUpstreamWire, upstreamUrlFor } from "./wire";
 
 interface RequestMeta {
@@ -113,6 +114,8 @@ interface RequestMeta {
   keyName?: string;
   /** Transient upstream failures that were retried before this turn was recorded. */
   retries?: number;
+  /** Set once a ledger row is written so cancel cannot double-record a finished turn. */
+  recorded?: boolean;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -272,6 +275,9 @@ function record(
   pricingKnown: boolean,
   error?: string,
 ): void {
+  // A canceled stream's transform `cancel` and a racing `flush` must not both write.
+  if (meta.recorded) return;
+  meta.recorded = true;
   if (meta.store && status >= 200 && status < 300) {
     meta.store.observeCache(meta.session, {
       provider: meta.provider,
@@ -386,6 +392,31 @@ function skippedHeader(skipped: RouteSkip[]): string {
 function errorResponse(c: Context, meta: RequestMeta, status: number, message: string): Response {
   record(meta, status, emptyUsage(), null, true, message);
   return c.json({ error: { message, type: "jevonian_error" } }, status as 400);
+}
+
+/**
+ * An SSE Response that keeps the socket warm during silent thinking and writes a
+ * ledger row when the client hangs up before the stream finishes.
+ */
+function streamResponse(
+  stream: ReadableStream<Uint8Array> | null,
+  meta: RequestMeta,
+  headers: Record<string, string>,
+  contentType = "text/event-stream",
+): Response {
+  return new Response(
+    streamWithKeepalive(stream, {
+      onClientCancel: () => record(meta, 499, emptyUsage(), null, true, "client canceled"),
+    }),
+    {
+      status: 200,
+      headers: {
+        "content-type": contentType,
+        "cache-control": "no-store",
+        ...headers,
+      },
+    },
+  );
 }
 
 /** One line describing why an upstream attempt is being repeated. */
@@ -718,14 +749,19 @@ function injectClaudeCodeSystem(body: Record<string, unknown>): void {
   const system = body.system;
   const prompt = { type: "text", text: CLAUDE_CODE_SYSTEM_PROMPT };
   if (typeof system === "string") {
-    body.system = system.length > 0 ? [prompt, { type: "text", text: system }] : [prompt];
+    // Native Anthropic clients still send a bare string; mark the user system
+    // (or the Claude Code prompt alone) so OAuth turns get the same cache hits.
+    body.system =
+      system.length > 0
+        ? [prompt, { type: "text", text: system, cache_control: { type: "ephemeral" } }]
+        : [{ ...prompt, cache_control: { type: "ephemeral" } }];
     return;
   }
   if (Array.isArray(system)) {
     body.system = [prompt, ...system];
     return;
   }
-  body.system = [prompt];
+  body.system = [{ ...prompt, cache_control: { type: "ephemeral" } }];
 }
 
 async function forward(
@@ -1203,14 +1239,7 @@ async function forward(
           record(meta, 200, usage, cost.usd, cost.known);
         });
         const streamBody = upstream.body?.pipeThrough(toChat).pipeThrough(toResponses) ?? null;
-        return new Response(streamBody, {
-          status: 200,
-          headers: {
-            "content-type": "text/event-stream",
-            "cache-control": "no-store",
-            ...decisionHeaders(decision, meta.retries),
-          },
-        });
+        return streamResponse(streamBody, meta, decisionHeaders(decision, meta.retries));
       }
       if (!upstreamStream) {
         const json = (await upstream.json()) as Record<string, unknown>;
@@ -1229,14 +1258,11 @@ async function forward(
         const cost = costOf(decision.model, usage, new Date(), decision.provider);
         record(meta, 200, usage, cost.usd, cost.known);
       });
-      return new Response(upstream.body?.pipeThrough(transform) ?? null, {
-        status: 200,
-        headers: {
-          "content-type": "text/event-stream",
-          "cache-control": "no-store",
-          ...decisionHeaders(decision, meta.retries),
-        },
-      });
+      return streamResponse(
+        upstream.body?.pipeThrough(transform) ?? null,
+        meta,
+        decisionHeaders(decision, meta.retries),
+      );
     }
 
     // Gemini must win over the OpenAI bridge on the way back too. planUpstreamWire
@@ -1290,14 +1316,7 @@ async function forward(
           record(meta, 200, usage, cost.usd, cost.known);
         });
         const body = upstream.body?.pipeThrough(toChat).pipeThrough(toResponses) ?? null;
-        return new Response(body, {
-          status: 200,
-          headers: {
-            "content-type": "text/event-stream",
-            "cache-control": "no-store",
-            ...decisionHeaders(decision, meta.retries),
-          },
-        });
+        return streamResponse(body, meta, decisionHeaders(decision, meta.retries));
       }
       if (!upstreamStream) {
         const json = (await upstream.json()) as Record<string, unknown>;
@@ -1317,14 +1336,11 @@ async function forward(
         const cost = costOf(decision.model, usage, new Date(), decision.provider);
         record(meta, 200, usage, cost.usd, cost.known);
       });
-      return new Response(upstream.body?.pipeThrough(transform) ?? null, {
-        status: 200,
-        headers: {
-          "content-type": "text/event-stream",
-          "cache-control": "no-store",
-          ...decisionHeaders(decision, meta.retries),
-        },
-      });
+      return streamResponse(
+        upstream.body?.pipeThrough(transform) ?? null,
+        meta,
+        decisionHeaders(decision, meta.retries),
+      );
     }
 
     if (upstreamKind === "openai" && bridgeToOpenAI) {
@@ -1336,14 +1352,11 @@ async function forward(
             const cost = costOf(decision.model, usage, new Date(), decision.provider);
             record(meta, 200, usage, cost.usd, cost.known);
           });
-          return new Response(upstream.body?.pipeThrough(transform) ?? null, {
-            status: 200,
-            headers: {
-              "content-type": "text/event-stream",
-              "cache-control": "no-store",
-              ...decisionHeaders(decision, meta.retries),
-            },
-          });
+          return streamResponse(
+            upstream.body?.pipeThrough(transform) ?? null,
+            meta,
+            decisionHeaders(decision, meta.retries),
+          );
         }
         const json = (await upstream.json()) as Record<string, unknown>;
         const usage = openaiUsage(json.usage);
@@ -1393,14 +1406,11 @@ async function forward(
             const cost = costOf(decision.model, result.usage, new Date(), decision.provider);
             record(meta, 200, result.usage, cost.usd, cost.known);
           });
-          return new Response(upstream.body?.pipeThrough(transform) ?? null, {
-            status: 200,
-            headers: {
-              "content-type": "text/event-stream",
-              "cache-control": "no-store",
-              ...decisionHeaders(decision, meta.retries),
-            },
-          });
+          return streamResponse(
+            upstream.body?.pipeThrough(transform) ?? null,
+            meta,
+            decisionHeaders(decision, meta.retries),
+          );
         }
         const text = await upstream.text();
         const { events } = splitSseEvents(text);
@@ -1454,14 +1464,12 @@ async function forward(
         const cost = costOf(decision.model, usage, new Date(), decision.provider);
         record(meta, 200, usage, cost.usd, cost.known);
       });
-      return new Response(upstream.body?.pipeThrough(transform) ?? null, {
-        status: 200,
-        headers: {
-          "content-type": upstream.headers.get("content-type") ?? "text/event-stream",
-          "cache-control": "no-store",
-          ...decisionHeaders(decision, meta.retries),
-        },
-      });
+      return streamResponse(
+        upstream.body?.pipeThrough(transform) ?? null,
+        meta,
+        decisionHeaders(decision, meta.retries),
+        upstream.headers.get("content-type") ?? "text/event-stream",
+      );
     }
 
     const usage = emptyUsage();
@@ -1512,14 +1520,12 @@ async function forward(
     }
     stream = stream?.pipeThrough(usageTransform) ?? null;
 
-    return new Response(stream, {
-      status: 200,
-      headers: {
-        "content-type": upstream.headers.get("content-type") ?? "text/event-stream",
-        "cache-control": "no-store",
-        ...decisionHeaders(decision, meta.retries),
-      },
-    });
+    return streamResponse(
+      stream,
+      meta,
+      decisionHeaders(decision, meta.retries),
+      upstream.headers.get("content-type") ?? "text/event-stream",
+    );
   }
 }
 

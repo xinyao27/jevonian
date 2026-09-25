@@ -82,7 +82,9 @@ describe("chatToAnthropic", () => {
       tool_choice: { type: "function", function: { name: "read" } },
     });
 
-    expect(request.system).toBe("be brief");
+    expect(request.system).toEqual([
+      { type: "text", text: "be brief", cache_control: { type: "ephemeral" } },
+    ]);
     expect(request.max_tokens).toBe(512);
     expect(request.temperature).toBe(0.2);
     const messages = request.messages as Array<{
@@ -98,12 +100,48 @@ describe("chatToAnthropic", () => {
     });
     expect(messages[2]).toEqual({
       role: "user",
-      content: [{ type: "tool_result", tool_use_id: "call_1", content: "Error: test failed" }],
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "call_1",
+          content: "Error: test failed",
+          cache_control: { type: "ephemeral" },
+        },
+      ],
     });
     expect(request.tools).toEqual([
-      { name: "read", description: "read a file", input_schema: { type: "object" } },
+      {
+        name: "read",
+        description: "read a file",
+        input_schema: { type: "object" },
+        cache_control: { type: "ephemeral" },
+      },
     ]);
     expect(request.tool_choice).toEqual({ type: "tool", name: "read" });
+  });
+
+  it("marks prompt-cache breakpoints on system, tools, and the last message", () => {
+    const request = chatToAnthropic({
+      messages: [
+        { role: "system", content: "rules" },
+        { role: "user", content: "one" },
+        { role: "assistant", content: "two" },
+        { role: "user", content: "three" },
+      ],
+      tools: [
+        { type: "function", function: { name: "a", parameters: { type: "object" } } },
+        { type: "function", function: { name: "b", parameters: { type: "object" } } },
+      ],
+    });
+    expect(request.system).toEqual([
+      { type: "text", text: "rules", cache_control: { type: "ephemeral" } },
+    ]);
+    const tools = request.tools as Array<Record<string, unknown>>;
+    expect(tools[0]?.cache_control).toBeUndefined();
+    expect(tools[1]?.cache_control).toEqual({ type: "ephemeral" });
+    const messages = request.messages as Array<{ content: Array<Record<string, unknown>> }>;
+    expect(messages[0]?.content[0]?.cache_control).toBeUndefined();
+    expect(messages.at(-1)?.content[0]?.cache_control).toEqual({ type: "ephemeral" });
   });
 
   it("defaults max_tokens like Anthropic requires", () => {
@@ -122,6 +160,7 @@ describe("chatToAnthropic", () => {
       type: "tool_result",
       tool_use_id: "call_1",
       content: "line one",
+      cache_control: { type: "ephemeral" },
     });
   });
 
