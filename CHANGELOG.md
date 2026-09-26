@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.1.8] - 2026-09-26
+
+### Fixed
+
+- Bridged Claude streams no longer go silent during thinking: an SSE keepalive comment is emitted every 15s of idle so agents and tunnels stop canceling long Opus turns around the two-minute mark. A client disconnect is recorded as ledger `499` / `client canceled` instead of vanishing with only a brain row.
+- Chat Completions → Anthropic bridging now sets prompt-cache breakpoints on the system prompt, the last tool schema, and the last message block, so long agent sessions reuse the conversation prefix instead of re-billing ~80k uncached tokens every turn.
+- Claude subscription `429` responses that only carry `type: rate_limit_error` (no spend token) now trigger same-request quota failover when the unified rate-limit headers say the window is spent, so the next model in the phase chain gets the turn instead of hard-failing Opus. The live quota cache is cleared so a rejected header snapshot is not masked for five minutes.
+
 ## [0.1.7] - 2026-09-23
 
 ### Fixed
