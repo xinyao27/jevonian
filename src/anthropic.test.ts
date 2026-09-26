@@ -9,6 +9,7 @@ import {
   chatToAnthropic,
   chatToAnthropicMessage,
   needsAnthropicWire,
+  orderAnthropicToolResults,
 } from "./anthropic";
 import type { Usage } from "./pricing";
 import { chatToResponsesStream } from "./responses";
@@ -52,6 +53,39 @@ describe("anthropicToChatRequest / chatToAnthropicMessage", () => {
       stop_reason: "end_turn",
       usage: { input_tokens: 3, output_tokens: 1 },
     });
+  });
+});
+
+describe("orderAnthropicToolResults", () => {
+  it("moves tool results ahead of a text block in the same user message", () => {
+    const body = orderAnthropicToolResults({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "call_1", name: "read", input: {} }],
+        },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "The user sent a new message while you were working" },
+            { type: "tool_result", tool_use_id: "call_1", content: "ok" },
+          ],
+        },
+      ],
+    });
+    const content = (body.messages as Array<{ content: Array<{ type: string }> }>)[1]?.content;
+    expect(content?.map((block) => block.type)).toEqual(["tool_result", "text"]);
+  });
+});
+
+describe("anthropic max token field", () => {
+  it("uses max_completion_tokens for gpt-6", () => {
+    const request = anthropicToChatRequest(
+      { max_tokens: 32, messages: [{ role: "user", content: "hi" }] },
+      "gpt-6-astra",
+    );
+    expect(request.max_completion_tokens).toBe(32);
+    expect(request.max_tokens).toBeUndefined();
   });
 });
 
