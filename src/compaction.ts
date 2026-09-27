@@ -152,6 +152,38 @@ export const STATE_CONTEXT =
  */
 const TOKEN_PIECES = /[A-Za-z]+|\d+|[^\sA-Za-z\d]/g;
 
+/**
+ * Drops the oldest messages until a JSON estimate of the list is within `budget`.
+ * A leading user message that is only `tool_result` blocks is dropped too, so the
+ * list does not start on an answer whose call was removed.
+ */
+export function trimOversizedMessages(
+  body: Record<string, unknown>,
+  budget = 300_000,
+): Record<string, unknown> {
+  const key = Array.isArray(body.messages) ? "messages" : Array.isArray(body.input) ? "input" : "";
+  if (key.length === 0) return body;
+  let messages = [...(body[key] as unknown[])];
+  const size = () => estimateTokens(JSON.stringify(messages));
+  if (messages.length <= 8 || size() <= budget) return body;
+  while (messages.length > 8 && size() > budget) messages = messages.slice(1);
+  while (messages.length > 1) {
+    const first = messages[0];
+    if (!first || typeof first !== "object") break;
+    const content = (first as { content?: unknown }).content;
+    const onlyResults =
+      Array.isArray(content) &&
+      content.length > 0 &&
+      content.every(
+        (block) =>
+          !!block && typeof block === "object" && (block as { type?: unknown }).type === "tool_result",
+      );
+    if (!onlyResults) break;
+    messages = messages.slice(1);
+  }
+  return { ...body, [key]: messages };
+}
+
 export function estimateTokens(text: string): number {
   let tokens = 0;
   for (const [piece] of text.matchAll(TOKEN_PIECES)) {
@@ -639,6 +671,21 @@ export function fitState(
   perEntry = history.map(entryTokens);
   tokens = baseTokens + perEntry.reduce((sum, count) => sum + count, 0);
   if (fits()) return fitted(history, tokens, "old calls merged");
+
+  // The estimator runs a few percent high. Drop oldest rows until the state fits,
+  // keeping the newest row so the questions still have a conversation to judge.
+  const dropped = new Set<number>();
+  for (let index = 0; index < history.length - 1; index += 1) {
+    dropped.add(index);
+    tokens -= perEntry[index] ?? 0;
+    if (fits()) {
+      return fitted(
+        history.filter((_, i) => !dropped.has(i)),
+        tokens,
+        "oldest dropped",
+      );
+    }
+  }
 
   throw new Error(
     `history too large for Jev (~${tokens} tokens after truncation, limit ${options.maxStateTokens})`,

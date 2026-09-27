@@ -210,6 +210,27 @@ export function chatToAnthropic(body: Record<string, unknown>): Record<string, u
  * OpenAI-only model (DeepSeek on Command Code / OpenCode Go) — that model must leave on
  * `/chat/completions`, then the reply is folded back with {@link chatToAnthropicMessage}.
  */
+/**
+ * DeepSeek's Anthropic endpoint rejects a user message that puts text before `tool_result`.
+ * The results must be the first blocks, immediately after the assistant `tool_use`.
+ */
+export function orderAnthropicToolResults(body: Record<string, unknown>): Record<string, unknown> {
+  if (!Array.isArray(body.messages)) return body;
+  let changed = false;
+  const messages = body.messages.map((raw) => {
+    const message = asRecord(raw);
+    if (message.role !== "user" || !Array.isArray(message.content)) return raw;
+    const content = message.content;
+    const results = content.filter((block) => asRecord(block).type === "tool_result");
+    if (results.length === 0 || results.length === content.length) return raw;
+    if (asRecord(content[0]).type === "tool_result") return raw;
+    changed = true;
+    const rest = content.filter((block) => asRecord(block).type !== "tool_result");
+    return { ...message, content: [...results, ...rest] };
+  });
+  return changed ? { ...body, messages } : body;
+}
+
 export function anthropicToChatRequest(
   body: Record<string, unknown>,
   model: string,
@@ -280,10 +301,14 @@ export function anthropicToChatRequest(
   }
 
   const max = body.max_tokens;
+  // gpt-5, gpt-6 and o-series reject `max_tokens` and require `max_completion_tokens`.
+  const maxField = /^(?:openai\/)?(?:gpt-5|gpt-6|o\d)/.test(model)
+    ? "max_completion_tokens"
+    : "max_tokens";
   const out: Record<string, unknown> = {
     model,
     messages,
-    max_tokens: typeof max === "number" && max > 0 ? max : 4_096,
+    [maxField]: typeof max === "number" && max > 0 ? max : 4_096,
   };
   if (typeof body.temperature === "number") out.temperature = body.temperature;
   if (typeof body.top_p === "number") out.top_p = body.top_p;

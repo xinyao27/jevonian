@@ -8,6 +8,7 @@ import {
   decideCall,
   estimateTokens,
   fitState,
+  trimOversizedMessages,
   normalizeTranscript,
   reductionRatio,
   resolveOptions,
@@ -224,8 +225,21 @@ describe("state fitting", () => {
     expect(collapsed.state.history[4]?.text).toBe("latest");
   });
 
-  it("throws when the history cannot be fitted", () => {
-    const messages = [message("user", "a".repeat(2000)), message("assistant", "b")];
+  it("trims the oldest messages until the estimate fits the budget", () => {
+    const messages = Array.from({ length: 20 }, (_, i) => ({
+      role: "user",
+      content: "x".repeat(8_000) + String(i),
+    }));
+    const trimmed = trimOversizedMessages({ messages }, 20_000);
+    const kept = trimmed.messages as unknown[];
+    expect(kept.length).toBeGreaterThan(8);
+    expect(kept.length).toBeLessThan(messages.length);
+    expect(estimateTokens(JSON.stringify(kept))).toBeLessThanOrEqual(20_000);
+    expect((kept.at(-1) as { content: string }).content.endsWith("19")).toBe(true);
+  });
+
+  it("throws when one remaining message still cannot fit", () => {
+    const messages = [message("user", "a".repeat(2000)), message("assistant", "b".repeat(2000))];
     expect(() => fitState(messages, [], { ...fit, maxStateTokens: 50 })).toThrow(/too large/);
   });
 });
