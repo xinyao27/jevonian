@@ -1429,8 +1429,17 @@ export function RoutingPage() {
             <CardContent className="flex flex-col gap-3 text-sm">
               <div className="flex items-center justify-between gap-3">
                 <span className="text-muted-foreground">
-                  Dedupe repeated lines, drop noise (npm warnings, progress), and truncate outputs
-                  beyond {saver.maxChars.toLocaleString()} chars.
+                  Pipes each tool result through{" "}
+                  <a
+                    href="https://github.com/rtk-ai/rtk"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-medium text-foreground underline underline-offset-4"
+                  >
+                    rtk
+                  </a>{" "}
+                  — its filters compress test logs, git output, grep hits, and more. Install with{" "}
+                  <code>brew install rtk</code>.
                 </span>
                 <Select
                   value={saver.enabled ? "on" : "off"}
@@ -1447,43 +1456,37 @@ export function RoutingPage() {
                 </Select>
               </div>
               {saver.enabled ? (
-                <div className="grid grid-cols-3 gap-2 border-t pt-3">
+                <div className="grid grid-cols-2 gap-2 border-t pt-3">
                   <label className="flex flex-col gap-1">
                     <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                      Max chars
+                      rtk binary
+                    </span>
+                    <Input
+                      type="text"
+                      value={saver.command}
+                      disabled={saverBusy}
+                      onChange={(event) => setSaver({ ...saver, command: event.target.value })}
+                      onBlur={() => void saveSaver({ command: saver.command })}
+                      className="h-8 font-mono text-xs"
+                      placeholder="rtk"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                      timeout (ms)
                     </span>
                     <Input
                       type="number"
                       min={0}
-                      step={5000}
-                      value={saver.maxChars}
+                      step={500}
+                      value={saver.timeoutMs}
                       disabled={saverBusy}
                       onChange={(event) =>
-                        setSaver({ ...saver, maxChars: Number(event.target.value) })
+                        setSaver({ ...saver, timeoutMs: Number(event.target.value) })
                       }
-                      onBlur={() => void saveSaver({ maxChars: saver.maxChars })}
+                      onBlur={() => void saveSaver({ timeoutMs: saver.timeoutMs })}
                       className="h-8 text-xs"
                     />
-                  </label>
-                  <label className="flex items-end gap-1.5 pb-1 text-xs text-muted-foreground">
-                    <input
-                      type="checkbox"
-                      checked={saver.dedupeLines}
-                      disabled={saverBusy}
-                      onChange={(event) => void saveSaver({ dedupeLines: event.target.checked })}
-                      className="size-3.5 accent-foreground"
-                    />
-                    dedupe lines
-                  </label>
-                  <label className="flex items-end gap-1.5 pb-1 text-xs text-muted-foreground">
-                    <input
-                      type="checkbox"
-                      checked={saver.stripNoise}
-                      disabled={saverBusy}
-                      onChange={(event) => void saveSaver({ stripNoise: event.target.checked })}
-                      className="size-3.5 accent-foreground"
-                    />
-                    strip noise
                   </label>
                 </div>
               ) : null}

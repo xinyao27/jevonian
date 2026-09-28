@@ -416,8 +416,8 @@ export interface Config {
   /** Outgoing prompt hygiene: built-in rival-prompt signatures plus operator rules. */
   promptPolicy: PromptPolicyConfig;
   /**
-   * Deterministic compression of prior tool results before a request leaves for the
-   * provider — the RTK-style token saver. `enabled: false` sends every body untouched.
+   * Compression of prior tool results before a request leaves for the provider, powered by
+   * the `rtk` binary. `enabled: false` sends every body untouched.
    */
   tokenSaver: TokenSaverConfig;
 }

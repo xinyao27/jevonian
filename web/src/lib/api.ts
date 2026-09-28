@@ -205,9 +205,10 @@ export interface ModelSyncConfigView {
 
 export interface TokenSaverConfigView {
   enabled: boolean;
-  maxChars: number;
-  dedupeLines: boolean;
-  stripNoise: boolean;
+  /** Path to the `rtk` binary, or `"rtk"` to resolve via PATH. */
+  command: string;
+  /** Per-call timeout before the original tool result is kept. */
+  timeoutMs: number;
 }
 
 export interface ModelSyncProviderResultView {

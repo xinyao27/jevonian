@@ -57,7 +57,6 @@ import { createKey, hasKeys, listKeysWithUsage, revokeKey, updateKey } from "./k
 import { readRecords, subscribeLedger, type LedgerRecord } from "./ledger";
 import type { ServerLifecycle } from "./lifecycle";
 import { loadModelSyncState, runModelSync } from "./model-sync";
-import { parseTokenSaver } from "./saver";
 import { canonicalModelId, canonicalModels } from "./models";
 import { loadPricingSnapshot } from "./modelsdev";
 import type { OAuthSource } from "./oauth";
@@ -65,6 +64,7 @@ import { initPricing, priceFor, pricingInfo } from "./pricing";
 import { PRESETS } from "./providers";
 import { providerQuotaHealth, providerQuotas } from "./quota";
 import { claudeCodeModels, deriveRoutings, deriveTiers, desktopModels } from "./routing";
+import { parseTokenSaver } from "./saver";
 import { summarize } from "./stats";
 import type { TunnelManager } from "./tunnel";
 import type { UpdateManager, UpdateStatus } from "./updates";
@@ -962,9 +962,8 @@ export function createAdminApp(state: AppState): Hono {
       tokenSaver: parseTokenSaver({
         ...config.tokenSaver,
         ...(typeof body.enabled === "boolean" ? { enabled: body.enabled } : {}),
-        ...(typeof body.maxChars === "number" ? { maxChars: body.maxChars } : {}),
-        ...(typeof body.dedupeLines === "boolean" ? { dedupeLines: body.dedupeLines } : {}),
-        ...(typeof body.stripNoise === "boolean" ? { stripNoise: body.stripNoise } : {}),
+        ...(typeof body.command === "string" ? { command: body.command } : {}),
+        ...(typeof body.timeoutMs === "number" ? { timeoutMs: body.timeoutMs } : {}),
       }),
     };
     persist(next);

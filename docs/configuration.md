@@ -145,19 +145,24 @@ prompt text.
 
 Agents re-send their whole conversation on every turn, and the bulky part is usually prior tool
 results — test logs, `git status`, long file reads. The token saver compresses those tool results
-inside the outgoing request body before it leaves for the provider, in the spirit of
-[RTK](https://github.com/rtk-ai/rtk): dedupe repeated lines, drop noise (npm warnings, download
-progress), and cap oversized outputs with a marker noting how much was removed. The edits are
-deterministic — nothing is summarised or rewritten by a model, so an exact error string or file
-path survives verbatim — and the turn's ledger row records the estimated prompt tokens kept back.
-`jevonian report` and the dashboard's Overview stats show the running total.
+inside the outgoing request body before it leaves for the provider by piping each one through
+[`rtk`](https://github.com/rtk-ai/rtk) — the Rust Token Killer coding agents already use to
+compact command output. `rtk pipe` reads a result on stdin, auto-detects the output shape
+(cargo test, pytest, vitest, grep-like, find-like, mypy, phpunit, ctest, go-test JSON, …) and
+prints a smaller version on stdout; when nothing matches, the text passes through byte-identical.
+The edits are deterministic — nothing is summarised or rewritten by a model, so an exact error
+string or file path survives verbatim — and the turn's ledger row records the estimated prompt
+tokens kept back. `jevonian report` and the dashboard's Overview stats show the running total.
 
-| Field                    | Default  | Meaning                                                                   |
-| ------------------------ | -------- | ------------------------------------------------------------------------- |
-| `tokenSaver.enabled`     | `true`   | Master switch; `false` sends every body untouched                         |
-| `tokenSaver.maxChars`    | `30000`  | Per-result cap, keeping head and tail with a "removed N chars" marker     |
-| `tokenSaver.dedupeLines` | `true`   | Collapse runs of identical lines into `line × n`                          |
-| `tokenSaver.stripNoise`  | `true`   | Drop noise lines (npm warnings, progress bars, spinner frames, blanks)    |
+Install `rtk` with `brew install rtk` or download a release from
+[rtk-ai/rtk](https://github.com/rtk-ai/rtk/releases); the saver ships enabled and quietly leaves
+every body untouched when the binary is missing.
+
+| Field                  | Default | Meaning                                                                         |
+| ---------------------- | ------- | ------------------------------------------------------------------------------- |
+| `tokenSaver.enabled`   | `true`  | Master switch; `false` sends every body untouched                               |
+| `tokenSaver.command`   | `rtk`   | Binary name resolved via `PATH`, or an absolute path to a specific install      |
+| `tokenSaver.timeoutMs` | `3000`  | Milliseconds a single `rtk pipe` call may take before the original text is kept |
 
 The switch lives on the Routing page ("Token saver" card) and accepts partial updates at
 `PUT /api/token-saver`. Compression runs on whichever wire the turn takes — Chat Completions

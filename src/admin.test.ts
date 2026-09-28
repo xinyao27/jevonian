@@ -465,17 +465,21 @@ describe("admin config writes", () => {
     const response = await app.request("/token-saver", {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ enabled: false, maxChars: 5_000 }),
+      body: JSON.stringify({ enabled: false, command: "/opt/rtk/bin/rtk", timeoutMs: 2_000 }),
     });
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { tokenSaver: { enabled: boolean; maxChars: number } };
+    const body = (await response.json()) as {
+      tokenSaver: { enabled: boolean; command: string; timeoutMs: number };
+    };
     expect(body.tokenSaver.enabled).toBe(false);
-    expect(body.tokenSaver.maxChars).toBe(5_000);
+    expect(body.tokenSaver.command).toBe("/opt/rtk/bin/rtk");
+    expect(body.tokenSaver.timeoutMs).toBe(2_000);
     const written = JSON.parse(readFileSync(path, "utf8")) as {
-      tokenSaver: { enabled: boolean; maxChars: number };
+      tokenSaver: { enabled: boolean; command: string; timeoutMs: number };
     };
     expect(written.tokenSaver.enabled).toBe(false);
-    expect(written.tokenSaver.maxChars).toBe(5_000);
+    expect(written.tokenSaver.command).toBe("/opt/rtk/bin/rtk");
+    expect(written.tokenSaver.timeoutMs).toBe(2_000);
   });
 
   it("clamps a too-short model-sync interval", async () => {

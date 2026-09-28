@@ -57,7 +57,6 @@ import { LOCAL_CLIENT_KEYS } from "./local-client";
 import { CLAUDE_CODE_SYSTEM_PROMPT, invalidateOAuthToken } from "./oauth";
 import { costOf, type Usage } from "./pricing";
 import { rewritePromptBodies } from "./prompt-policy";
-import { saveTokens } from "./saver";
 import {
   captureQuotaHeaders,
   captureUsageLimit,
@@ -109,6 +108,7 @@ import {
   type RouteSkip,
   type SessionStore,
 } from "./routing";
+import { saveTokens, warnSaverUnavailable } from "./saver";
 import type { AppEnv } from "./server";
 import { streamWithKeepalive } from "./stream-keepalive";
 import { planUpstreamWire, upstreamUrlFor } from "./wire";
@@ -1599,10 +1599,11 @@ async function forward(
     // encoding; both passes are idempotent.
     upstreamBody = rewritePromptBodies(upstreamBody, config.promptPolicy);
     // The token saver compresses prior tool results on the fully assembled upstream body, so
-    // whichever wire the turn took — chat, Anthropic, Responses, or the Devin fold — shares
-    // the same deterministic filters. The estimate lands on the ledger row written by `record`.
+    // whichever wire the turn took — chat, Anthropic, Responses, or the Devin fold — gets the
+    // same `rtk` filtering. The estimate lands on the ledger row written by `record`.
     if (config.tokenSaver.enabled) {
-      const saved = saveTokens(upstreamBody, upstreamKind, config.tokenSaver);
+      const saved = await saveTokens(upstreamBody, config.tokenSaver);
+      warnSaverUnavailable(config.tokenSaver, saved.stats.unavailable === true);
       if (saved.stats.savedTokens > 0) {
         upstreamBody = saved.body;
         meta.savedTokens = saved.stats.savedTokens;

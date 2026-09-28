@@ -181,6 +181,7 @@ function report(): void {
     cacheRead: number;
     cost: number;
     unpriced: number;
+    saved: number;
   }
 
   const byModel = new Map<string, Row>();
@@ -200,11 +201,13 @@ function report(): void {
       cacheRead: 0,
       cost: 0,
       unpriced: 0,
+      saved: 0,
     };
     row.requests += 1;
     row.prompt += record.promptTokens;
     row.output += record.completionTokens;
     row.cacheRead += record.cacheReadTokens;
+    row.saved += record.savedTokens ?? 0;
     if (record.costUsd === null) {
       row.unpriced += 1;
     } else {
@@ -237,16 +240,16 @@ function report(): void {
     }
   }
 
-  const columns = ["model", "reqs", "prompt", "output", "cache read", "cost"];
+  const columns = ["model", "reqs", "prompt", "output", "cache read", "saved", "cost"];
   console.log(
-    `${pad(columns[0] ?? "model", 24)} ${padStart(columns[1] ?? "reqs", 6)} ${padStart(columns[2] ?? "prompt", 10)} ${padStart(columns[3] ?? "output", 10)} ${padStart(columns[4] ?? "cache read", 12)} ${padStart(columns[5] ?? "cost", 10)}`,
+    `${pad(columns[0] ?? "model", 24)} ${padStart(columns[1] ?? "reqs", 6)} ${padStart(columns[2] ?? "prompt", 10)} ${padStart(columns[3] ?? "output", 10)} ${padStart(columns[4] ?? "cache read", 12)} ${padStart(columns[5] ?? "saved", 10)} ${padStart(columns[6] ?? "cost", 10)}`,
   );
   for (const [model, row] of [...byModel.entries()].sort(
     (left, right) => right[1].cost - left[1].cost,
   )) {
     const unpriced = row.unpriced > 0 ? ` (+${row.unpriced} unpriced)` : "";
     console.log(
-      `${pad(model || "(none)", 24)} ${padStart(String(row.requests), 6)} ${padStart(String(row.prompt), 10)} ${padStart(String(row.output), 10)} ${padStart(String(row.cacheRead), 12)} ${padStart(money(row.cost) + unpriced, 10)}`,
+      `${pad(model || "(none)", 24)} ${padStart(String(row.requests), 6)} ${padStart(String(row.prompt), 10)} ${padStart(String(row.output), 10)} ${padStart(String(row.cacheRead), 12)} ${padStart(row.saved > 0 ? `~${row.saved}` : "0", 10)} ${padStart(money(row.cost) + unpriced, 10)}`,
     );
   }
 
@@ -269,7 +272,9 @@ function report(): void {
   if (savedTokens > 0) {
     console.log(
       `token saver: ~${savedTokens.toLocaleString()} tokens kept out of prompts` +
-        (prompt > 0 ? ` (${((savedTokens / (prompt + savedTokens)) * 100).toFixed(1)}% of input)` : ""),
+        (prompt > 0
+          ? ` (${((savedTokens / (prompt + savedTokens)) * 100).toFixed(1)}% of input)`
+          : ""),
     );
   }
   console.log(`brain-decided: ${brainDecided}`);
