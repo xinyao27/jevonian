@@ -86,10 +86,10 @@ export function Layout() {
   return (
     <SidebarProvider>
       <Sidebar collapsible="icon" className="border-sidebar-border">
-        <SidebarHeader className="border-b border-sidebar-border px-2 py-3">
+        <SidebarHeader className="h-14 justify-center border-b border-sidebar-border px-2 py-0">
           <NavLink
             to="/"
-            className="flex items-center gap-3 rounded-xl px-2 py-2.5 outline-none ring-sidebar-ring transition-colors hover:bg-sidebar-accent/60 focus-visible:ring-2 group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:p-0"
+            className="flex items-center gap-3 rounded-xl px-2 py-1 outline-none ring-sidebar-ring transition-colors hover:bg-sidebar-accent/60 focus-visible:ring-2 group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:p-0"
           >
             <span className="relative flex size-8 shrink-0 overflow-hidden rounded-xl bg-background shadow-[0_0_0_1px_var(--sidebar-border)]">
               <img src="/jevonian-logo.png" alt="" className="size-full object-cover" />
