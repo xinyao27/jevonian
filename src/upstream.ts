@@ -124,6 +124,16 @@ import { saveTokens, warnSaverUnavailable } from "./saver";
 import type { AppEnv } from "./server";
 import { streamWithKeepalive } from "./stream-keepalive";
 import {
+  beginRoute,
+  beginTry,
+  endTry,
+  finishRoute,
+  firstToken,
+  noteDecision,
+  weigh,
+  type TryCause,
+} from "./trace";
+import {
   normalizeOpenAIMessages,
   planUpstreamWire,
   sanitizeOpenAIChatResponse,
@@ -163,6 +173,8 @@ interface RequestMeta {
   retries?: number;
   /** Estimated prompt tokens the tool-result saver removed before egress. */
   savedTokens?: number;
+  /** Trace this turn is being recorded under, so attempts and TTFT land on the ledger row. */
+  traceId?: string;
   /** Set once a ledger row is written so cancel cannot double-record a finished turn. */
   recorded?: boolean;
 }
@@ -234,6 +246,7 @@ function remoteCompactionDecision(
   config: Config,
   body: Record<string, unknown>,
   headers: Record<string, string | undefined>,
+  requestId: string,
 ): RouteDecision | { error: string; status: number } {
   const providers = config.providers.filter((provider) => provider.type === "responses");
   const preferred =
@@ -273,6 +286,7 @@ function remoteCompactionDecision(
     routed: true,
     reason: "remote-compaction",
     session: resolveSessionKey(body, headers),
+    requestId,
   };
 }
 
@@ -327,6 +341,11 @@ function record(
   // A canceled stream's transform `cancel` and a racing `flush` must not both write.
   if (meta.recorded) return;
   meta.recorded = true;
+  // The trace ends with the turn, so the ledger row can carry the attempt history. A turn
+  // that was never traced (a pinned model with no route decision) simply has no trace.
+  const trace = meta.traceId
+    ? finishRoute(meta.traceId, { status, ...(error ? { error } : {}) })
+    : undefined;
   if (meta.store && status >= 200 && status < 300) {
     meta.store.observeCache(meta.session, {
       provider: meta.provider,
@@ -373,6 +392,11 @@ function record(
     ...(meta.skipped && meta.skipped.length > 0 ? { skipped: meta.skipped } : {}),
     ...(meta.retries ? { retries: meta.retries } : {}),
     ...(meta.savedTokens ? { savedTokens: meta.savedTokens } : {}),
+    // Only a turn that needed more than one attempt carries the list: a clean turn stays as
+    // small as it was, and a row with no field reads as "not recorded", never "0 tries".
+    ...(trace && trace.tries.length > 1 ? { tries: trace.tries } : {}),
+    ...(trace && trace.failovers > 0 ? { failovers: trace.failovers } : {}),
+    ...(trace?.ttftMs === undefined ? {} : { ttftMs: trace.ttftMs }),
     ...(error ? { error } : {}),
   });
 }
@@ -388,6 +412,7 @@ function decisionMeta(
 ): RequestMeta {
   return {
     id,
+    traceId: id,
     session: decision.session,
     path,
     provider: decision.provider,
@@ -419,6 +444,8 @@ function decisionHeaders(decision: RouteDecision, retries = 0): Record<string, s
     "x-jevonian-phase": decision.phase,
     "x-jevonian-session": decision.session,
     "x-jevonian-reason": decision.reason,
+    // Correlates a client's own logs with `/logs/:id` and the routing trace for this turn.
+    "x-jevonian-request-id": decision.requestId,
     // Reported only when the turn needed one, so a healthy response stays uncluttered.
     ...(retries > 0 ? { "x-jevonian-retries": String(retries) } : {}),
     ...(decision.cache ? { "x-jevonian-cache-state": decision.cache.state } : {}),
@@ -462,6 +489,11 @@ function streamResponse(
     streamWithKeepalive(stream, {
       onClientCancel:
         onClientCancel ?? (() => record(meta, 499, emptyUsage(), null, true, "client canceled")),
+      // The first real chunk is the first byte a client can render, which is what makes a
+      // first-token measurement meaningful. Keepalive comments never reach this callback.
+      onFirstChunk: () => {
+        if (meta.traceId) firstToken(meta.traceId);
+      },
     }),
     {
       status: 200,
@@ -1606,6 +1638,12 @@ async function forward(
   const keyId = c.get("keyId") as string | undefined;
   const keyName = c.get("keyName") as string | undefined;
   const incomingHeaders = requestHeaders(c);
+  // The client's own session header, when it sent one. A resolved session key can be a
+  // prompt fingerprint the client does not know, so both are kept for lookup.
+  const clientSession =
+    incomingHeaders["x-session-id"] ??
+    incomingHeaders["x-jevonian-session"] ??
+    incomingHeaders["x-opencode-session"];
   let decision: RouteDecision;
   {
     // Codex remote compaction must stay on a native Responses (ChatGPT) upstream.
@@ -1613,7 +1651,7 @@ async function forward(
     // Chat Completions bridge then synthesizes a message item instead of `compaction`.
     const initial =
       clientKind === "responses" && isRemoteCompactionV2(body)
-        ? remoteCompactionDecision(config, body, incomingHeaders)
+        ? remoteCompactionDecision(config, body, incomingHeaders, requestId)
         : await decideRoute({
             config,
             body,
@@ -1632,6 +1670,24 @@ async function forward(
     }
     decision = initial;
   }
+
+  // The trace exists from the first decision on, so a turn is observable before its first
+  // byte and a failed attempt is recorded even when the turn never reaches the ledger.
+  beginRoute({
+    requestId,
+    session: decision.session,
+    ...(clientSession && clientSession !== decision.session ? { clientSession } : {}),
+    ...(keyId ? { keyId } : {}),
+    ...(keyName ? { keyName } : {}),
+    path: endpoint,
+    requestedModel: decision.requestedModel,
+    stream: clientStream,
+    startedAt: started,
+    phase: decision.phase,
+    reason: decision.reason,
+    ...(decision.cacheKeep ? { cacheKeep: decision.cacheKeep } : {}),
+  });
+  if (decision.order && decision.order.length > 0) weigh(requestId, decision.order);
 
   // A conservative token estimate can be a false positive. Try to compact proactively,
   // but if Jev is unavailable or there are no stale tool results, let the provider make the
@@ -1652,12 +1708,20 @@ async function forward(
       if (!("error" in retry)) {
         body = compacted.body;
         decision = retry;
+        noteDecision(requestId, {
+          phase: retry.phase,
+          reason: retry.reason,
+          ...(retry.cacheKeep ? { cacheKeep: retry.cacheKeep } : {}),
+        });
+        if (retry.order && retry.order.length > 0) weigh(requestId, retry.order);
       }
     }
   }
 
   let quotaFailovers = 0;
   let overflowRetries = 0;
+  /** Passes through the routing loop: the count is what distinguishes initial from failover. */
+  let attemptCount = 0;
   /**
    * Every provider/model this turn has already tried and been refused by. Failover keeps
    * walking the routing chain until `decideRoute` can only offer a target from this set —
@@ -1694,6 +1758,12 @@ async function forward(
     triedTargets.add(target);
     decision = { ...next, reason: `${next.reason}:quota-failover` };
     quotaFailovers += 1;
+    noteDecision(requestId, {
+      phase: decision.phase,
+      reason: decision.reason,
+      ...(decision.cacheKeep ? { cacheKeep: decision.cacheKeep } : {}),
+    });
+    if (next.order && next.order.length > 0) weigh(requestId, next.order);
     return true;
   };
   while (true) {
@@ -1702,6 +1772,20 @@ async function forward(
     if (!provider) {
       return errorResponse(c, meta, 404, `Provider "${decision.provider}" is not configured`);
     }
+    // Every pass through this loop is one upstream attempt. The first is `initial`; a re-route
+    // after a refusal or a context retry is a `failover`, which is what the waterfall draws.
+    const attemptCause: TryCause = attemptCount === 0 ? "initial" : "failover";
+    // Devin and Cursor can re-route from inside their response helpers, past the explicit
+    // `endTry` calls below. Close whatever is still open so no attempt is left dangling;
+    // `endTry` is a no-op when the previous attempt was already closed.
+    if (attemptCount > 0) endTry(requestId, { fail: "refused" });
+    attemptCount += 1;
+    beginTry(requestId, {
+      provider: decision.provider,
+      model: decision.model,
+      cause: attemptCause,
+      ...(decision.effort ? { effort: decision.effort } : {}),
+    });
     meta.store = store;
     meta.billing = provider.billing;
 
@@ -2011,7 +2095,12 @@ async function forward(
         requestId: crypto.randomUUID(),
       });
       if (attempt.error) {
-        if (cursorShouldFailover(attempt.error)) {
+        const refused = cursorShouldFailover(attempt.error);
+        endTry(requestId, {
+          status: cursorErrorStatus(attempt.error),
+          fail: refused ? attempt.error.kind : `http-${cursorErrorStatus(attempt.error)}`,
+        });
+        if (refused) {
           markCursorRefusal(provider, attempt.error);
           if (await quotaFailover()) continue;
         }
@@ -2046,6 +2135,15 @@ async function forward(
     const retryBudget = configuredRetries();
     const onRetry = ({ attempt, delayMs, failure }: RetryAttempt): void => {
       meta.retries = (meta.retries ?? 0) + 1;
+      // The attempt that just failed is closed here, and the retry that follows is opened as
+      // its own try, so the waterfall shows the transient failure rather than hiding it.
+      endTry(requestId, { fail: describeRetryFailure(failure) });
+      beginTry(requestId, {
+        provider: decision.provider,
+        model: decision.model,
+        cause: "retry",
+        ...(decision.effort ? { effort: decision.effort } : {}),
+      });
       console.warn(
         `upstream retry ${attempt}/${retryBudget} for ${decision.provider} in ${delayMs}ms: ${describeRetryFailure(failure)}`,
       );
@@ -2077,6 +2175,7 @@ async function forward(
         }
       }
     } catch (error) {
+      endTry(requestId, { fail: `fetch: ${describeFetchError(error)}`.slice(0, 120) });
       return errorResponse(c, meta, 502, `Upstream request failed: ${describeFetchError(error)}`);
     }
 
@@ -2147,7 +2246,12 @@ async function forward(
           kind: "other" as const,
           message: "Devin returned no stream",
         };
-        if (devinShouldFailover(error)) {
+        const refused = devinShouldFailover(error);
+        endTry(requestId, {
+          status: devinErrorStatus(error),
+          fail: refused ? error.kind : `http-${devinErrorStatus(error)}`,
+        });
+        if (refused) {
           markDevinRefusal(provider, error, decision.model);
           if (await quotaFailover()) continue;
         }
@@ -2203,6 +2307,13 @@ async function forward(
           if (!("error" in retry)) {
             body = shrunk.body;
             decision = { ...retry, reason: `${retry.reason}:context-retry` };
+            endTry(requestId, { status: upstream.status, fail: "context-overflow" });
+            noteDecision(requestId, {
+              phase: decision.phase,
+              reason: decision.reason,
+              ...(decision.cacheKeep ? { cacheKeep: decision.cacheKeep } : {}),
+            });
+            if (retry.order && retry.order.length > 0) weigh(requestId, retry.order);
             continue;
           }
         }
@@ -2230,7 +2341,14 @@ async function forward(
           resetsAt: new Date(Date.now() + PROVIDER_COOLDOWN_MS).toISOString(),
         });
       }
-      if (refused && (await quotaFailover())) continue;
+      if (refused && (await quotaFailover())) {
+        endTry(requestId, {
+          status: upstream.status,
+          fail: spent || exhausted ? "quota" : `http-${upstream.status}`,
+        });
+        continue;
+      }
+      endTry(requestId, { status: upstream.status, fail: `http-${upstream.status}` });
       record(meta, upstream.status, emptyUsage(), null, true, text.slice(0, 300));
       return new Response(text, {
         status: upstream.status,

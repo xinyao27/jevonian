@@ -446,17 +446,36 @@ export function LogsPage() {
                     </div>
                     <div
                       className={cn(
-                        "col-span-1 font-mono font-medium",
+                        "col-span-1 flex min-w-0 items-center gap-1.5 font-mono font-medium",
                         log.status >= 400 ? "text-destructive" : "text-muted-foreground",
                       )}
                     >
-                      {log.status}
+                      <span>{log.status}</span>
+                      {log.tries && log.tries.length > 1 ? (
+                        <span className="inline-flex shrink-0 items-center gap-0.5">
+                          {log.tries.map((attempt, index) => (
+                            <span
+                              key={`${attempt.provider}-${index}`}
+                              title={`${attempt.provider}/${attempt.model} · ${attempt.cause}${
+                                attempt.fail ? ` · ${attempt.fail}` : ""
+                              }${attempt.status !== undefined ? ` · ${attempt.status}` : ""}`}
+                              className={cn(
+                                "size-1.5 shrink-0 rounded-full",
+                                attempt.fail ? "bg-destructive" : "bg-emerald-500",
+                              )}
+                            />
+                          ))}
+                        </span>
+                      ) : null}
                     </div>
                     <div className="col-span-1 font-mono text-muted-foreground">
                       {log.costUsd === null ? "—" : money(log.costUsd)}
                     </div>
                     <div className="col-span-1 font-mono text-muted-foreground">
                       {log.latencyMs}ms
+                      {log.ttftMs !== undefined ? (
+                        <span className="text-muted-foreground/60"> · ttft {log.ttftMs}ms</span>
+                      ) : null}
                     </div>
                     <div className="col-span-1 text-right text-muted-foreground">
                       {log.id ? "details →" : "no id"}

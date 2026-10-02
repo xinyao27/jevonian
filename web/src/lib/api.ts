@@ -345,11 +345,36 @@ export interface LogRecord {
   savedTokens?: number;
   /** Transient upstream failures retried before this turn was recorded. */
   retries?: number;
+  /**
+   * Every upstream attempt for this turn, in order. Absent on a clean turn, and on a row
+   * written before tracing existed — which reads as "not recorded", never "0 attempts".
+   */
+  tries?: LogAttempt[];
+  /** Quota or refusal failovers this turn took before it was served. */
+  failovers?: number;
+  /** Milliseconds from the request arriving to the first streamed content. */
+  ttftMs?: number;
   error?: string;
   /** Jevonian key that authorized the request, or "local" / "unauthenticated". */
   keyId?: string;
   /** Key name captured at request time, so a revoked key still reads sensibly. */
   keyName?: string;
+}
+
+/** One upstream attempt for a turn: the first shot, a transient repeat, or a re-route. */
+export interface LogAttempt {
+  provider: string;
+  model: string;
+  cause: "initial" | "retry" | "failover";
+  /** Epoch ms the attempt began, so the detail page can place it on a timeline. */
+  startedAt?: number;
+  status?: number;
+  /** Wall-clock duration of the attempt. */
+  ms?: number;
+  /** Milliseconds from the turn starting to this attempt's first streamed content. */
+  ttftMs?: number;
+  /** Why the attempt failed: `quota`, `http-502`, `fetch: ECONNRESET`, `client-canceled`, … */
+  fail?: string;
 }
 
 export interface LogDetailResponse {

@@ -4,6 +4,11 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Attempt history for every routed turn.** A turn is now traced while it runs, from the first routing decision to the last byte. When a turn needed more than one attempt, its ledger row carries `tries` (every upstream attempt with its `cause` — `initial`, `retry`, or `failover` — plus `status`, `ms`, `startedAt`, `ttftMs`, and, on failure, `fail`), `failovers`, and `ttftMs` (time to first streamed content). A turn served on its first attempt carries none of these fields, so a healthy row stays as small as before, and a row written before this existed reads as "not recorded" rather than "0 attempts". The request detail page draws the attempts as a waterfall, the Logs list shows a dot per attempt plus the first-token time, and searching the Logs for `failover` or `retry` finds the turns that struggled.
+- **`x-jevonian-request-id` response header.** Every response names the id this turn was recorded under — the ledger row, the captured body, and the trace — so a client's own log can be joined to `/logs/:id` without a second lookup.
+
 ## [0.5.1] - 2026-10-02
 
 ### Changed

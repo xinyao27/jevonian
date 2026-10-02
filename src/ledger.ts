@@ -50,6 +50,27 @@ export interface LedgerRecord {
    * the first attempt succeeded, so a clean turn carries no field at all.
    */
   retries?: number;
+  /**
+   * Every upstream attempt for this turn, in order. Omitted when the first try succeeded, so a
+   * clean turn stays as small as today. A row written before tracing existed has no field at
+   * all, which reads as "not recorded" rather than "0 attempts".
+   */
+  tries?: Array<{
+    provider: string;
+    model: string;
+    cause: "initial" | "retry" | "failover";
+    /** Epoch ms the attempt began, so the detail page can draw a waterfall. */
+    startedAt?: number;
+    status?: number;
+    ms?: number;
+    /** Milliseconds from the turn starting to this attempt's first streamed content. */
+    ttftMs?: number;
+    fail?: string;
+  }>;
+  /** Quota or refusal failovers this turn took before it was served. */
+  failovers?: number;
+  /** Milliseconds from the request arriving to the first streamed content. */
+  ttftMs?: number;
   error?: string;
   /** Jevonian key ID that authorized the request, or "local" / "unauthenticated". */
   keyId?: string;

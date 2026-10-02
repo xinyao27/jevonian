@@ -26,6 +26,12 @@ export interface StreamKeepaliveOptions {
    * disconnect (cancel with no reason / AbortError).
    */
   onClientCancel?: () => void;
+  /**
+   * Called once, when the first non-keepalive chunk reaches the client. This is the
+   * first byte the client can render, which is what makes a first-token measurement
+   * meaningful; a keepalive comment is not content.
+   */
+  onFirstChunk?: () => void;
 }
 
 /** True when a TransformStream `cancel` reason looks like a client disconnect. */
@@ -49,6 +55,7 @@ export function streamWithKeepalive(
   const intervalMs = options.intervalMs ?? STREAM_KEEPALIVE_MS;
   let timer: ReturnType<typeof setInterval> | undefined;
   let settled = false;
+  let sawFirst = false;
 
   const clear = (): void => {
     if (timer === undefined) return;
@@ -74,6 +81,14 @@ export function streamWithKeepalive(
       arm(controller);
     },
     transform(chunk, controller) {
+      if (!sawFirst) {
+        sawFirst = true;
+        try {
+          options.onFirstChunk?.();
+        } catch {
+          // Observing a stream must never break it.
+        }
+      }
       controller.enqueue(chunk);
       arm(controller);
     },

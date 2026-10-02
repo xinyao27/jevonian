@@ -36,6 +36,7 @@ import {
 } from "./quota";
 import { configuredRetries, withRetry } from "./retry";
 import { sessionFingerprint } from "./session";
+import type { WeighedCandidate } from "./trace";
 import { canServeClient } from "./wire";
 
 /** A routing id chosen for a turn — builtin or custom. */
@@ -612,6 +613,8 @@ export interface RouteDecision {
   provider: string;
   phase: Phase;
   requestedModel: string;
+  /** The id this turn is recorded under: ledger row, captured body, and trace. */
+  requestId: string;
   canonical?: string;
   virtual: boolean;
   routed: boolean;
@@ -641,6 +644,12 @@ export interface RouteDecision {
   switchPenaltyUsd?: number | null;
   /** Why the conversation stayed where it was answered, or moved, when affinity had a say. */
   cacheKeep?: CacheKeepReason;
+  /**
+   * The candidate order the turn chose from, best first, with each candidate's quota health
+   * and cache state as routing saw them. Reporting only: the trace and the ledger show it, and
+   * nothing branches on it. Absent when no candidate list was built.
+   */
+  order?: WeighedCandidate[];
 }
 
 export interface RouteSkip {
@@ -1436,6 +1445,51 @@ function emptyUsage(): Usage {
   return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 }
 
+/**
+ * The candidate order as the trace and the ledger report it: what routing put first, and what
+ * each candidate's quota health and cache state were when the order was built. Reporting only —
+ * nothing reads this back, so a slow probe or a missing capability can never change a decision.
+ */
+function weighedOrder(
+  candidates: TierPick[],
+  options: {
+    config: Config;
+    now: number;
+    cache?: CacheCandidateView[];
+    skipped?: RouteSkip[];
+  },
+): WeighedCandidate[] {
+  const cacheStateBy = new Map(
+    (options.cache ?? []).map((candidate) => [
+      `${candidate.provider}/${candidate.model}`,
+      candidate.cache.state,
+    ]),
+  );
+  const skippedBy = new Map(
+    (options.skipped ?? []).map((entry) => [
+      `${entry.provider}/${entry.model}`,
+      { reason: entry.reason as string, detail: entry.detail },
+    ]),
+  );
+  const lowPercent = options.config.routing.quotaGuard.lowPercent;
+  return candidates.map((candidate, rank) => {
+    const provider = options.config.providers.find((entry) => entry.name === candidate.provider);
+    const cacheState = cacheStateBy.get(`${candidate.provider}/${candidate.model}`);
+    const skipped = skippedBy.get(`${candidate.provider}/${candidate.model}`);
+    return {
+      provider: candidate.provider,
+      model: candidate.model,
+      ...(candidate.canonical ? { canonical: candidate.canonical } : {}),
+      rank,
+      ...(provider
+        ? { quota: providerQuotaHealth(provider, { lowPercent, now: options.now }).status }
+        : {}),
+      ...(cacheState ? { cacheState } : {}),
+      ...(skipped ? { skipped } : {}),
+    };
+  });
+}
+
 function recordBrainCall(input: {
   config: Config;
   session: string;
@@ -1507,6 +1561,9 @@ export async function decideRoute(
   const now = input.now ?? Date.now();
   const requestedRaw = typeof body.model === "string" ? body.model : "";
   const requestedModel = requestedRaw.replace(/^jevonian\//, "");
+  // The turn's identity: the ledger row, the captured body, and the trace all use this id, so
+  // the dashboard and `x-jevonian-request-id` can join them without a second lookup key.
+  const requestId = input.requestId ?? crypto.randomUUID();
   // Virtual ids (`auto`, routing phases) always win over a provider that happens to
   // catalog the same bare name — otherwise `jevonian/auto` collapses onto Cursor's
   // `auto` model and every default client request 500s.
@@ -1561,6 +1618,11 @@ export async function decideRoute(
         routed: false,
         reason: "pinned-model",
         session,
+        requestId,
+        order: weighedOrder([{ provider: exact.name, model: requestedModel }], {
+          config,
+          now,
+        }),
       };
     }
 
@@ -1592,6 +1654,8 @@ export async function decideRoute(
           routed: false,
           reason: "canonical-model",
           session,
+          requestId,
+          order: weighedOrder(variants, { config, now }),
         };
       }
     }
@@ -1609,6 +1673,7 @@ export async function decideRoute(
       routed: false,
       reason: "pinned-model",
       session,
+      requestId,
     };
   }
 
@@ -1767,6 +1832,8 @@ export async function decideRoute(
       ...(explicitNote ? { effortNote: explicitNote } : {}),
       ...(keepReason !== undefined ? { cacheKeep: keepReason } : {}),
       session,
+      requestId,
+      order: weighedOrder(tier, { config, now }),
     };
   }
 
@@ -2167,6 +2234,7 @@ export async function decideRoute(
     routed: true,
     reason,
     session,
+    requestId,
     brain,
     ...(brainChannel ? { brainChannel } : {}),
     ...(confidence === undefined ? {} : { confidence }),
@@ -2179,6 +2247,12 @@ export async function decideRoute(
       ? {}
       : { switchPenaltyUsd: chosenCandidate.switchPenaltyUsd }),
     ...(keepReason !== undefined ? { cacheKeep: keepReason } : {}),
+    order: weighedOrder(offer.candidates, {
+      config,
+      now,
+      cache: offer.offeredToBrain,
+      skipped: offer.skipped,
+    }),
   };
 }
 

@@ -5,7 +5,7 @@ import { LogDetailSkeleton } from "@/components/page-skeletons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { api, type LogDetailResponse, type LogRecord } from "@/lib/api";
+import { api, type LogAttempt, type LogDetailResponse, type LogRecord } from "@/lib/api";
 import { formatTime, money } from "@/lib/utils";
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -210,6 +210,15 @@ function decisionRows(record: LogRecord): Array<{ label: string; value: string }
       value: `${record.retries} (transient upstream failure, recovered)`,
     });
   }
+  if (record.failovers) {
+    rows.push({
+      label: "failovers",
+      value: `${record.failovers} (the provider refused; the turn moved elsewhere)`,
+    });
+  }
+  if (record.ttftMs !== undefined) {
+    rows.push({ label: "first token", value: `${record.ttftMs}ms` });
+  }
   const brain = [record.brain ?? "-", record.brainChannel ?? ""].filter(Boolean).join(" · ");
   rows.push({ label: "brain", value: brain });
   if (record.skipped && record.skipped.length > 0) {
@@ -222,6 +231,119 @@ function decisionRows(record: LogRecord): Array<{ label: string; value: string }
   }
   if (record.error) rows.push({ label: "error", value: record.error });
   return rows;
+}
+
+/**
+ * The short reason an attempt failed, in the operator's words. The stored value is a
+ * classification (`quota`, `http-502`, `fetch: ECONNRESET`) so the UI can name it without
+ * guessing at a vendor's message.
+ */
+function attemptFailLabel(fail: string): string {
+  if (fail === "quota") return "quota exhausted";
+  if (fail === "client-canceled") return "client canceled";
+  if (fail === "context-overflow") return "context overflow";
+  if (fail.startsWith("http-")) return `HTTP ${fail.slice(5)}`;
+  if (fail.startsWith("fetch:")) return fail.slice(6).trim();
+  return fail;
+}
+
+/** A single dot per attempt: red for a failure, green for the one that served the turn. */
+function AttemptDots({ tries }: { tries: LogAttempt[] }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      {tries.map((attempt, index) => (
+        <span
+          key={`${attempt.provider}-${index}`}
+          title={`${attempt.provider}/${attempt.model} · ${attempt.cause}${
+            attempt.fail ? ` · ${attemptFailLabel(attempt.fail)}` : ""
+          }${attempt.status !== undefined ? ` · ${attempt.status}` : ""}`}
+          className={`size-1.5 shrink-0 rounded-full ${
+            attempt.fail ? "bg-destructive" : "bg-emerald-500"
+          }`}
+        />
+      ))}
+    </span>
+  );
+}
+
+/**
+ * The attempts this turn made, as a waterfall. Widths are proportional to the attempt's own
+ * duration, so a slow first try and a quick retry read differently at a glance.
+ */
+function AttemptsCard({ record }: { record: LogRecord }) {
+  const tries = record.tries ?? [];
+  if (tries.length === 0) {
+    return (
+      <Card className="min-w-0 overflow-hidden">
+        <CardHeader>
+          <CardTitle>Attempts</CardTitle>
+          <CardDescription>
+            {record.status >= 400
+              ? "No attempt history was captured for this turn."
+              : "This turn was served on its first attempt — nothing was retried or failed over."}
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+  const total = Math.max(record.latencyMs, ...tries.map((attempt) => attempt.ms ?? 0), 1);
+  return (
+    <Card className="min-w-0 overflow-hidden">
+      <CardHeader>
+        <CardTitle className="flex min-w-0 flex-wrap items-center gap-2">
+          Attempts
+          <AttemptDots tries={tries} />
+        </CardTitle>
+        <CardDescription>
+          {tries.length} attempt{tries.length === 1 ? "" : "s"}
+          {record.failovers
+            ? ` · ${record.failovers} failover${record.failovers === 1 ? "" : "s"}`
+            : ""}
+          {record.retries ? ` · ${record.retries} retr${record.retries === 1 ? "y" : "ies"}` : ""}
+          {record.ttftMs !== undefined ? ` · first token ${record.ttftMs}ms` : ""}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex min-w-0 flex-col gap-2">
+        {tries.map((attempt, index) => {
+          const width = Math.max(2, Math.round(((attempt.ms ?? 0) / total) * 100));
+          const failed = Boolean(attempt.fail);
+          return (
+            <div key={`${attempt.provider}-${attempt.model}-${index}`} className="min-w-0">
+              <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs">
+                <span className="font-mono text-muted-foreground">{index + 1}.</span>
+                <span className="font-medium">{attempt.provider}</span>
+                <span className="min-w-0 break-all text-muted-foreground">{attempt.model}</span>
+                <Badge
+                  variant={attempt.cause === "failover" ? "default" : "outline"}
+                  className="px-1 py-0 text-[10px]"
+                >
+                  {attempt.cause}
+                </Badge>
+                <span className="ml-auto shrink-0 font-mono text-muted-foreground">
+                  {attempt.status !== undefined ? `${attempt.status} · ` : ""}
+                  {attempt.ms !== undefined ? `${attempt.ms}ms` : "in flight"}
+                  {attempt.ttftMs !== undefined ? ` · first byte ${attempt.ttftMs}ms` : ""}
+                </span>
+              </div>
+              <div className="mt-1 flex min-w-0 items-center gap-2">
+                <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className={`h-full rounded-full ${failed ? "bg-destructive" : "bg-emerald-500"}`}
+                    style={{ width: `${width}%` }}
+                  />
+                </div>
+                <span
+                  className={`shrink-0 text-[11px] ${failed ? "text-destructive" : "text-muted-foreground"}`}
+                >
+                  {attempt.fail ? attemptFailLabel(attempt.fail) : "served this turn"}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </CardContent>
+    </Card>
+  );
 }
 
 function buildBundle(detail: LogDetailResponse): string {
@@ -240,6 +362,22 @@ function buildBundle(detail: LogDetailResponse): string {
     `- reason: ${record.reason ?? "-"}`,
     ...(record.retries
       ? [`- network retries: ${record.retries} (transient upstream failure, recovered)`]
+      : []),
+    ...(record.failovers ? [`- failovers: ${record.failovers}`] : []),
+    ...(record.ttftMs !== undefined ? [`- first token: ${record.ttftMs}ms`] : []),
+    ...(record.tries && record.tries.length > 0
+      ? [
+          `- attempts: ${record.tries
+            .map(
+              (attempt) =>
+                `${attempt.provider}/${attempt.model} (${attempt.cause}${
+                  attempt.status !== undefined ? `, ${attempt.status}` : ""
+                }${attempt.fail ? `, ${attemptFailLabel(attempt.fail)}` : ""}${
+                  attempt.ms !== undefined ? `, ${attempt.ms}ms` : ""
+                })`,
+            )
+            .join("; ")}`,
+        ]
       : []),
     `- brain: ${record.brain ?? "-"}${record.brainChannel ? ` (channel ${record.brainChannel})` : ""}`,
     ...(record.skipped && record.skipped.length > 0
@@ -437,6 +575,8 @@ export function LogDetailPage() {
           </RawBlock>
         </CardContent>
       </Card>
+
+      {isBrain ? null : <AttemptsCard record={record} />}
 
       <Card className="min-w-0 overflow-hidden">
         <CardHeader>

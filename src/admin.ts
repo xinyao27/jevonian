@@ -110,7 +110,20 @@ function logFilters(phase?: string, model?: string, query?: string): LogFilters 
 
 /** Free-text search covers the fields the row actually shows, plus routing reason. */
 function haystack(record: LedgerRecord): string {
-  return [record.model, record.provider, record.phase, record.session, record.reason, record.effort]
+  return [
+    record.model,
+    record.provider,
+    record.phase,
+    record.session,
+    record.reason,
+    record.effort,
+    // Let an operator find the turns that struggled, without opening each row: the attempt
+    // history is otherwise only visible in the detail view.
+    record.failovers ? "failover" : "",
+    record.retries ? "retry" : "",
+    record.tries?.some((attempt) => attempt.cause === "failover") ? "failover" : "",
+    record.tries?.some((attempt) => attempt.cause === "retry") ? "retry" : "",
+  ]
     .filter((value): value is string => typeof value === "string" && value.length > 0)
     .join(" ")
     .toLowerCase();

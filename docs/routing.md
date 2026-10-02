@@ -87,9 +87,21 @@ Stickiness is affinity, not a lock: Jev may move the session to a different mode
 
 ## Decision headers
 
-Every response carries `x-jevonian-model` and `x-jevonian-provider` (who actually served the turn) alongside `x-jevonian-phase`, `x-jevonian-session`, and `x-jevonian-reason`, plus `x-jevonian-effort` (the thinking level actually sent), `x-jevonian-effort-note` when it was clamped, and `x-jevonian-skipped` listing every model code withheld and why. When routing is unconfigured, tiers are derived from the price table: the priciest available model becomes `plan`, the cheapest becomes `execute` and `utility`.
+Every response carries `x-jevonian-model` and `x-jevonian-provider` (who actually served the turn) alongside `x-jevonian-phase`, `x-jevonian-session`, `x-jevonian-reason`, and `x-jevonian-request-id` (the id of this turn's ledger row, trace, and captured body, so a client's own log can be joined to the dashboard), plus `x-jevonian-effort` (the thinking level actually sent), `x-jevonian-effort-note` when it was clamped, and `x-jevonian-skipped` listing every model code withheld and why. When routing is unconfigured, tiers are derived from the price table: the priciest available model becomes `plan`, the cheapest becomes `execute` and `utility`.
 
 The ledger and the dashboard report the level the model was **actually sent**, read back from the outgoing body rather than from the router's intent — the two differ when the client set its own level. A level the client set in its own field (`reasoning_effort`, `reasoning`, or `thinking.budget_tokens`) is never overridden; when it disagrees with the router's choice, the record notes it as `client set "…"; router chose "…"`. A model that takes no level at all is not a level, so the record stays empty. The `report` command breaks traffic down by thinking level alongside phase.
+
+## Attempt history
+
+Every turn is traced while it runs, from the first routing decision to the last byte. The trace holds provider, model, timing, status, and the reason a try failed — never prompt text, tool arguments, or credentials — and lives in memory only (the newest 200 turns).
+
+The ledger row for a turn that needed more than one attempt carries what the trace saw:
+
+- `tries` — every upstream attempt, in order, each with its `provider`, `model`, `cause` (`initial`, `retry`, or `failover`), `status`, `ms`, `startedAt`, `ttftMs`, and, when it failed, `fail` (`quota`, `http-502`, `fetch: ECONNRESET`, `client-canceled`, `context-overflow`, …).
+- `failovers` — how many times a provider refused and the turn moved elsewhere.
+- `ttftMs` — milliseconds from the request arriving to the first streamed content.
+
+A turn served on its first attempt carries none of these fields, so a healthy row stays as small as before; a row written before this existed has no field at all, which reads as "not recorded" rather than "0 attempts". The request detail page draws `tries` as a waterfall, the Logs list shows a dot per attempt, and searching the Logs for `failover` or `retry` finds the turns that struggled.
 
 ## Cache-aware routing estimates
 
