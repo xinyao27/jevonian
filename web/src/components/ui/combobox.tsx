@@ -57,7 +57,7 @@ function DefaultOptionFace({ option }: { option: ComboboxOption }) {
         ) : null}
       </span>
       {option.meta && option.meta.length > 0 ? (
-        <span className="flex shrink-0 items-center gap-1.5">
+        <span className="flex min-w-0 shrink flex-wrap items-center justify-end gap-x-1.5 gap-y-0.5 [max-width:55%]">
           {option.meta.map((badge, index) => (
             <span
               key={`${badge.text}-${index}`}

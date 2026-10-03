@@ -1,4 +1,5 @@
 import { readRecords, type LedgerRecord } from "./ledger";
+import { modelGroupOf } from "./models";
 
 export type ActivityTimeRange = "today" | "24h" | "7d" | "30d" | "all";
 
@@ -35,7 +36,12 @@ export interface ActivitySeriesPoint {
 }
 
 export interface ActivityModelStat {
+  /** Canonical group key the row aggregates under (vendor prefix / date suffix stripped). */
   model: string;
+  /** Human-facing label — the catalog's display name, else the dominant raw spelling. */
+  label: string;
+  /** The raw wire ids folded into this row, in first-seen order. */
+  variants: string[];
   requests: number;
   promptTokens: number;
   completionTokens: number;
@@ -174,6 +180,8 @@ export function computeActivityReport(
   const modelMap = new Map<
     string,
     {
+      label: string;
+      variants: string[];
       requests: number;
       promptTokens: number;
       completionTokens: number;
@@ -202,8 +210,12 @@ export function computeActivityReport(
       errorRequests += 1;
     }
 
-    const modelName = r.model || "unknown";
-    const m = modelMap.get(modelName) ?? {
+    // Group by canonical id so differently-spelled spellings of one model merge into a single
+    // row. The catalog's display name is the label; the raw spellings are kept as variants.
+    const group = modelGroupOf(r.model || "unknown");
+    const m = modelMap.get(group.key) ?? {
+      label: group.label,
+      variants: [],
       requests: 0,
       promptTokens: 0,
       completionTokens: 0,
@@ -211,6 +223,11 @@ export function computeActivityReport(
       spendUsd: 0,
       subscriptionUsd: 0,
     };
+    const spelling = r.model || "unknown";
+    if (!m.variants.includes(spelling)) m.variants.push(spelling);
+    // Upgrade the label if a later, differently-spelled record resolves a catalog name the
+    // first didn't (e.g. an unknown bare id, then a vendor-qualified id the catalog names).
+    if (m.label === group.key && group.label !== group.key) m.label = group.label;
     m.requests += 1;
     m.promptTokens += r.promptTokens;
     m.completionTokens += r.completionTokens;
@@ -220,7 +237,7 @@ export function computeActivityReport(
     } else {
       m.spendUsd += cost;
     }
-    modelMap.set(modelName, m);
+    modelMap.set(group.key, m);
   }
 
   const totalRequests = windowRecords.length;
@@ -278,14 +295,16 @@ export function computeActivityReport(
 
   // Format models list
   const models: ActivityModelStat[] = Array.from(modelMap.entries())
-    .map(([model, s]) => {
+    .map(([groupKey, s]) => {
       const mSpend = Number(s.spendUsd.toFixed(6));
       const mSub = Number(s.subscriptionUsd.toFixed(6));
       const mTotal = mSpend + mSub;
       const percentSpend =
         totalSpendUsd > 0 ? Number(((mTotal / totalSpendUsd) * 100).toFixed(1)) : 0;
       return {
-        model,
+        model: groupKey,
+        label: s.label,
+        variants: s.variants,
         requests: s.requests,
         promptTokens: s.promptTokens,
         completionTokens: s.completionTokens,

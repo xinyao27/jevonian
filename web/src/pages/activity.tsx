@@ -222,7 +222,14 @@ export function ActivitySection() {
                 <div key={m.model} className="flex items-center justify-between gap-3 text-sm">
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="w-4 shrink-0 text-xs text-muted-foreground">{index + 1}</span>
-                    <span className="truncate font-medium">{m.model}</span>
+                    <span className="truncate font-medium" title={m.variants?.join(", ") ?? m.model}>
+                      {m.label ?? m.model}
+                    </span>
+                    {(m.variants?.length ?? 0) > 1 ? (
+                      <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[9px] text-muted-foreground">
+                        ×{m.variants!.length}
+                      </span>
+                    ) : null}
                   </div>
                   <div className="shrink-0 text-right font-mono text-xs text-muted-foreground">
                     {formatCompactNumber(m.totalTokens)} tok ·{" "}
@@ -362,7 +369,23 @@ export function ActivitySection() {
               <TableBody>
                 {report.models.map((m) => (
                   <TableRow key={m.model}>
-                    <TableCell className="font-medium">{m.model}</TableCell>
+                    <TableCell className="font-medium">
+                      <div className="flex min-w-0 flex-col">
+                        <span className="truncate" title={m.variants?.join(", ") ?? m.model}>
+                          {m.label ?? m.model}
+                        </span>
+                        {m.label && m.label !== m.model ? (
+                          <span className="truncate font-mono text-[10px] text-muted-foreground" title={m.variants?.join(", ") ?? m.model}>
+                            {m.model}
+                            {(m.variants?.length ?? 0) > 1 ? ` · ${m.variants!.length} ids` : ""}
+                          </span>
+                        ) : (m.variants?.length ?? 0) > 1 ? (
+                          <span className="truncate font-mono text-[10px] text-muted-foreground" title={m.variants?.join(", ")}>
+                            {m.variants!.length} ids
+                          </span>
+                        ) : null}
+                      </div>
+                    </TableCell>
                     <TableCell className="text-right font-mono text-xs">
                       {formatNumber(m.requests)}
                     </TableCell>

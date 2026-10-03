@@ -93,4 +93,51 @@ describe("activity report", () => {
     expect(key1Report.models.length).toBe(1);
     expect(key1Report.models[0].model).toBe("gpt-4o");
   });
+
+  it("merges differently-spelled variants of the same model into one row", () => {
+    const fixedNow = new Date("2026-09-21T12:00:00.000Z");
+
+    // Same underlying model recorded under three wire spellings across providers:
+    // vendor-prefixed + dated, dotted, and bare canonical.
+    const spellings = [
+      "anthropic/claude-3-5-sonnet-20241022",
+      "claude-3.5-sonnet",
+      "claude-3-5-sonnet-20241022",
+    ];
+    spellings.forEach((model, i) => {
+      appendRecord({
+        ts: `2026-09-21T1${i}:00:00.000Z`,
+        session: `s${i}`,
+        path: "/chat/completions",
+        provider: i === 0 ? "anthropic" : "openrouter",
+        model,
+        stream: false,
+        status: 200,
+        latencyMs: 100,
+        promptTokens: 100,
+        completionTokens: 10,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        costUsd: 0.01,
+        pricingKnown: true,
+        billing: "api",
+        keyId: "k1",
+        keyName: "key-1",
+      });
+    });
+
+    const report = computeActivityReport({ range: "24h" }, fixedNow);
+
+    // One row, not three — grouped by canonical id.
+    expect(report.models.length).toBe(1);
+    const row = report.models[0];
+    expect(row.model).toBe("claude-3-5-sonnet");
+    expect(row.requests).toBe(3);
+    expect(row.promptTokens).toBe(300);
+    expect(row.spendUsd).toBeCloseTo(0.03, 6);
+    expect(row.variants).toHaveLength(3);
+    // A friendly label when the catalog names the model, else the canonical id.
+    expect(typeof row.label).toBe("string");
+    expect(row.label.length).toBeGreaterThan(0);
+  });
 });

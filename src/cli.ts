@@ -33,7 +33,7 @@ import { lanBaseUrls, lanBindHost, lanPort } from "./lan";
 import { readRecords, type LedgerRecord } from "./ledger";
 import { ServerLifecycle } from "./lifecycle";
 import { scheduleModelSync, runModelSync } from "./model-sync";
-import { canonicalVariants, identityGaps } from "./models";
+import { canonicalVariants, identityGaps, modelGroupOf } from "./models";
 import { loadProviderMeta, loadPricingSnapshot } from "./modelsdev";
 import type { OAuthSource } from "./oauth";
 import {
@@ -205,7 +205,8 @@ function report(): void {
   const byEffort = new Map<string, { requests: number; cost: number }>();
 
   for (const record of records) {
-    const row = byModel.get(record.model) ?? {
+    const group = modelGroupOf(record.model || "unknown");
+    const row = byModel.get(group.key) ?? {
       requests: 0,
       prompt: 0,
       output: 0,
@@ -225,7 +226,7 @@ function report(): void {
       row.cost += record.costUsd;
       actualCost += record.costUsd;
     }
-    byModel.set(record.model, row);
+    byModel.set(group.key, row);
     cacheRead += record.cacheReadTokens;
     prompt += record.promptTokens;
     savedTokens += record.savedTokens ?? 0;

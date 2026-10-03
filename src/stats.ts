@@ -1,10 +1,14 @@
 import type { Config } from "./config";
 import type { LedgerRecord } from "./ledger";
+import { modelGroupOf } from "./models";
 import { costOf, priceFor, type Usage } from "./pricing";
 import { deriveTiers } from "./routing";
 
 export interface ModelStat {
+  /** Canonical group key the row aggregates under (vendor prefix / date suffix stripped). */
   model: string;
+  /** Human-facing label — the catalog's display name, else the dominant raw spelling. */
+  label: string;
   requests: number;
   promptTokens: number;
   completionTokens: number;
@@ -92,8 +96,10 @@ export function summarize(records: LedgerRecord[], config: Config | null): Stats
   );
 
   for (const record of records) {
-    const row = byModel.get(record.model) ?? {
-      model: record.model,
+    const group = modelGroupOf(record.model || "unknown");
+    const row = byModel.get(group.key) ?? {
+      model: group.key,
+      label: group.label,
       requests: 0,
       promptTokens: 0,
       completionTokens: 0,
@@ -101,6 +107,7 @@ export function summarize(records: LedgerRecord[], config: Config | null): Stats
       costUsd: 0,
       unpriced: 0,
     };
+    if (row.label === group.key && group.label !== group.key) row.label = group.label;
     row.requests += 1;
     row.promptTokens += record.promptTokens;
     row.completionTokens += record.completionTokens;
@@ -121,7 +128,7 @@ export function summarize(records: LedgerRecord[], config: Config | null): Stats
     } else {
       apiUsd += record.costUsd ?? 0;
     }
-    byModel.set(record.model, row);
+    byModel.set(group.key, row);
 
     const phase = byPhase.get(record.phase ?? "-") ?? {
       phase: record.phase ?? "-",

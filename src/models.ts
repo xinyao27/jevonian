@@ -24,6 +24,8 @@ export interface CanonicalModel {
 }
 
 const DATE_SUFFIX = /-\d{8}$/;
+/** Dashed date snapshot, e.g. `gpt-4o-2024-08-06` → `gpt-4o`. */
+const DASHED_DATE_SUFFIX = /-\d{4}-\d{2}-\d{2}$/;
 const SERVICE_TIER_SUFFIX = /-tiered$/;
 
 export function canonicalModelId(model: string): string {
@@ -32,9 +34,38 @@ export function canonicalModelId(model: string): string {
     .toLowerCase()
     .replace(/\./g, "-")
     .replace(DATE_SUFFIX, "")
+    .replace(DASHED_DATE_SUFFIX, "")
     .replace(SERVICE_TIER_SUFFIX, "")
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");
+}
+
+/**
+ * Group key + display label for a raw ledger `model` string.
+ *
+ * The ledger records the wire id a client asked for, and the same model arrives spelled
+ * differently across providers and clients (`anthropic/claude-3-5-sonnet-20241022`,
+ * `claude-3.5-sonnet`, `claude-3-5-sonnet-20241022`). Statistics must group by the canonical
+ * id, not the raw spelling, or one model splits into several rows/cards.
+ *
+ * `key` is the canonical id — vendor prefix and date/tiered suffixes stripped. `label` is the
+ * catalog's own display name when one exists ("Claude 3.5 Sonnet"), else the canonical id.
+ * `label` never feeds the group key.
+ */
+export interface ModelGroupLabel {
+  key: string;
+  label: string;
+}
+
+export function modelGroupOf(rawModel: string): ModelGroupLabel {
+  const raw = rawModel.trim();
+  const key = canonicalModelId(raw);
+  const groupKey = key.length > 0 ? key : raw || "unknown";
+
+  // Resolve the display name from the canonical key, not the raw spelling, so a dated snapshot
+  // (`gpt-4o-2024-08-06`) labels the group "GPT-4o" rather than "GPT-4o (2024-08-06)".
+  const displayName = identityOf(groupKey).displayName ?? identityOf(raw).displayName;
+  return { key: groupKey, label: displayName ?? groupKey };
 }
 
 /**

@@ -178,7 +178,12 @@ export interface ActivitySeriesPointView {
 }
 
 export interface ActivityModelStatView {
+  /** Canonical group key (vendor prefix / date suffix stripped). */
   model: string;
+  /** Human-facing label — catalog display name, else dominant raw spelling. */
+  label?: string;
+  /** Raw wire ids folded into this row. */
+  variants?: string[];
   requests: number;
   promptTokens: number;
   completionTokens: number;
