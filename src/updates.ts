@@ -13,6 +13,19 @@ import { fileURLToPath } from "node:url";
 export const UPDATE_INTERVAL_MS = 24 * 60 * 60 * 1_000;
 export const PACKAGE_NAME = "jevonian";
 
+/** Default timeout for registry requests; overridable via JEVONIAN_REGISTRY_TIMEOUT_MS. */
+const DEFAULT_REGISTRY_TIMEOUT_MS = 30_000;
+const MIN_REGISTRY_TIMEOUT_MS = 1_000;
+const MAX_REGISTRY_TIMEOUT_MS = 5 * 60_000;
+
+function registryTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = (env.JEVONIAN_REGISTRY_TIMEOUT_MS ?? "").trim();
+  if (raw.length === 0) return DEFAULT_REGISTRY_TIMEOUT_MS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) return DEFAULT_REGISTRY_TIMEOUT_MS;
+  return Math.min(MAX_REGISTRY_TIMEOUT_MS, Math.max(MIN_REGISTRY_TIMEOUT_MS, parsed));
+}
+
 export type InstallChannel = "npm" | "pnpm" | "source" | "unknown";
 
 export interface Installation {
@@ -208,11 +221,15 @@ export function formatUpdateNotice(
  * `.tgz` is public — during that window `npm install` dies with ETARGET/E404
  * and the dashboard only shows "installer exited 1".
  */
-export async function fetchRegistryVersion(fetchImpl: typeof fetch = fetch): Promise<string> {
-  const url = process.env.JEVONIAN_NPM_REGISTRY ?? "https://registry.npmjs.org/jevonian/latest";
+export async function fetchRegistryVersion(
+  fetchImpl: typeof fetch = fetch,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string> {
+  const timeoutMs = registryTimeoutMs(env);
+  const url = env.JEVONIAN_NPM_REGISTRY ?? "https://registry.npmjs.org/jevonian/latest";
   const response = await fetchImpl(url, {
     headers: { accept: "application/json", "user-agent": `${PACKAGE_NAME}-update-check` },
-    signal: AbortSignal.timeout(5_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) throw new Error(`registry returned ${response.status}`);
   const body = (await response.json()) as {
@@ -229,7 +246,7 @@ export async function fetchRegistryVersion(fetchImpl: typeof fetch = fetch): Pro
   const probe = await fetchImpl(tarball, {
     method: "HEAD",
     headers: { "user-agent": `${PACKAGE_NAME}-update-check` },
-    signal: AbortSignal.timeout(5_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!probe.ok) {
     throw new Error(

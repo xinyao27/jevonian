@@ -248,7 +248,7 @@ it("rejects a registry latest whose tarball is not yet public", async () => {
     }
     return new Response(null, { status: 404 });
   };
-  await expect(fetchRegistryVersion(fetchImpl)).rejects.toThrow(
+  await expect(fetchRegistryVersion(fetchImpl, process.env)).rejects.toThrow(
     /tarball is not available yet \(404\)/,
   );
   expect(calls).toEqual([
@@ -272,11 +272,74 @@ it("accepts a registry latest only after the tarball HEAD succeeds", async () =>
     expect(init?.method).toBe("HEAD");
     return new Response(null, { status: 200 });
   };
-  await expect(fetchRegistryVersion(fetchImpl)).resolves.toBe("0.4.1");
+  await expect(fetchRegistryVersion(fetchImpl, process.env)).resolves.toBe("0.4.1");
 });
 
 it("includes installer stderr in the failure message", async () => {
   await expect(
     spawnCommand("sh -c 'echo No matching version found for jevonian@0.4.1 >&2; exit 1'"),
   ).rejects.toThrow(/installer exited 1:.*No matching version found for jevonian@0\.4\.1/);
+});
+
+it("respects JEVONIAN_REGISTRY_TIMEOUT_MS for slow registries", async () => {
+  let metadataDelay = 0;
+  let tarballDelay = 0;
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = String(input);
+    // Check if request should abort
+    const signal = init?.signal;
+    const delay = url.endsWith("/latest") ? metadataDelay : tarballDelay;
+    if (delay > 0 && signal) {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(resolve, delay);
+        signal.addEventListener("abort", () => {
+          clearTimeout(timeout);
+          reject(new DOMException("The operation was aborted", "AbortError"));
+        });
+      });
+    }
+    if (url.endsWith("/latest")) {
+      return new Response(
+        JSON.stringify({
+          version: "0.4.2",
+          dist: { tarball: "https://registry.npmjs.org/jevonian/-/jevonian-0.4.2.tgz" },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response(null, { status: 200 });
+  };
+  const env = { JEVONIAN_REGISTRY_TIMEOUT_MS: "8000" };
+  metadataDelay = 6_000;
+  tarballDelay = 0;
+  await expect(fetchRegistryVersion(fetchImpl, env)).resolves.toBe("0.4.2");
+  metadataDelay = 0;
+  tarballDelay = 6_000;
+  await expect(fetchRegistryVersion(fetchImpl, env)).resolves.toBe("0.4.2");
+}, 20_000);
+
+it("aborts registry checks that exceed the configured timeout", async () => {
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/latest")) {
+      const signal = init?.signal;
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(resolve, 3_000);
+        signal?.addEventListener("abort", () => {
+          clearTimeout(timeout);
+          reject(new DOMException("The operation was aborted", "AbortError"));
+        });
+      });
+      return new Response(
+        JSON.stringify({
+          version: "0.4.2",
+          dist: { tarball: "https://registry.npmjs.org/jevonian/-/jevonian-0.4.2.tgz" },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response(null, { status: 200 });
+  };
+  const env = { JEVONIAN_REGISTRY_TIMEOUT_MS: "2000" };
+  await expect(fetchRegistryVersion(fetchImpl, env)).rejects.toThrow(/abort/i);
 });
