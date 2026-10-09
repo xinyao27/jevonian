@@ -82,6 +82,8 @@ export interface WindowErrors {
 
 export interface ScheduleErrors {
   timezone?: string;
+  /** A whole-schedule problem that no single window owns, such as too many windows. */
+  schedule?: string;
   windows: Record<string, WindowErrors>;
 }
 
@@ -92,7 +94,7 @@ export function scheduleErrors(schedule: ScheduleView): ScheduleErrors {
     errors.timezone = `"${schedule.timezone}" is not a time zone name. Use a name such as Asia/Singapore.`;
   }
   if (schedule.windows.length > MAX_SCHEDULE_WINDOWS) {
-    errors.timezone = errors.timezone ?? `Use at most ${MAX_SCHEDULE_WINDOWS} windows.`;
+    errors.schedule = `Use at most ${MAX_SCHEDULE_WINDOWS} windows.`;
   }
   for (const window of schedule.windows) {
     const entry: WindowErrors = {};
@@ -109,12 +111,13 @@ export function scheduleErrors(schedule: ScheduleView): ScheduleErrors {
 }
 
 export function hasScheduleErrors(errors: ScheduleErrors): boolean {
-  return Boolean(errors.timezone) || Object.keys(errors.windows).length > 0;
+  return Boolean(errors.timezone || errors.schedule) || Object.keys(errors.windows).length > 0;
 }
 
 /** First error message, in a stable order, for a top-level alert. */
 export function firstScheduleError(errors: ScheduleErrors, windows: ScheduleWindowView[]): string {
   if (errors.timezone) return errors.timezone;
+  if (errors.schedule) return errors.schedule;
   for (const window of windows) {
     const entry = errors.windows[window.id];
     if (!entry) continue;

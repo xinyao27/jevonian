@@ -118,7 +118,11 @@ test("scheduleErrors is clean for a valid schedule and limits the window count",
       window(`w${index}`, "09:00", "17:00"),
     ),
   });
-  assert.match(many.timezone ?? "", /at most 12 windows/);
+  assert.match(many.schedule ?? "", /at most 12 windows/);
+  // The window-count problem is not a time zone problem.
+  assert.equal(many.timezone, undefined);
+  assert.equal(hasScheduleErrors(many), true);
+  assert.match(firstScheduleError(many, []), /at most 12 windows/);
 });
 
 test("scheduleIsIdle is true only when no task lists models for a window", () => {

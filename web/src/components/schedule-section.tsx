@@ -156,6 +156,8 @@ export function ScheduleSection({
   const [busy, setBusy] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const zones = useMemo(() => knownZones(), []);
+  // The browser zone is a good default and the "Use …" shortcut label. It never changes.
+  const localZone = useMemo(() => browserZone(), []);
   const windows = schedule?.windows ?? [];
 
   // Validation runs on the draft, so errors appear while editing rather than only on save.
@@ -165,6 +167,8 @@ export function ScheduleSection({
 
   // The card warns about windows that can never apply, even before the editor is opened.
   const shadows = useMemo(() => shadowedWindows(windows), [windows]);
+  // Overlap that keeps both windows reachable still surprises: the first one wins inside it.
+  const overlaps = useMemo(() => partialOverlaps(windows), [windows]);
   const idle = scheduleIsIdle(routes, schedule);
   const firstUnconfigured = routes.find((route) => !Object.keys(route.windows ?? {}).length);
 
@@ -180,7 +184,7 @@ export function ScheduleSection({
             timezone: schedule.timezone,
             windows: schedule.windows.map((window) => ({ ...window })),
           }
-        : { timezone: browserZone(), windows: [] },
+        : { timezone: localZone, windows: [] },
     );
     setError("");
     setConfirmRemove(false);
@@ -240,26 +244,18 @@ export function ScheduleSection({
     if (message) setError(message);
     else setOpen(false);
   }
+  /** Trim the draft, and save it when it is valid. Trimmed values are what the server stores. */
   function commit() {
     const timezone = draft.timezone.trim();
     // An empty name is an error, not a silent removal: the editor has Remove schedule for that.
-    setDraft((current) => ({
-      ...current,
-      timezone,
-      windows: current.windows.map((window) => ({ ...window, label: window.label.trim() })),
-    }));
-    const errors = scheduleErrors({
-      timezone,
-      windows: draft.windows.map((window) => ({ ...window, label: window.label.trim() })),
-    });
+    const windows = draft.windows.map((window) => ({ ...window, label: window.label.trim() }));
+    setDraft({ timezone, windows });
+    const errors = scheduleErrors({ timezone, windows });
     if (hasScheduleErrors(errors)) {
-      setError(firstScheduleError(errors, draft.windows));
+      setError(firstScheduleError(errors, windows));
       return;
     }
-    void save({
-      timezone,
-      windows: draft.windows.map((window) => ({ ...window, label: window.label.trim() })),
-    });
+    void save({ timezone, windows });
   }
 
   return (
@@ -302,6 +298,17 @@ export function ScheduleSection({
               action={
                 <Banner.Action onClick={openEditor}>Reorder</Banner.Action>
               }
+            />
+          </LayerCard.Primary>
+        ) : overlaps.length > 0 ? (
+          <LayerCard.Primary className="block pt-0">
+            <Banner
+              variant="default"
+              title="These windows overlap"
+              description={`${overlaps
+                .map(([later, earlier]) => `${windowName(later)} overlaps ${windowName(earlier)}`)
+                .join(", ")}. The first one wins in the overlap.`}
+              action={<Banner.Action onClick={openEditor}>Edit schedule</Banner.Action>}
             />
           </LayerCard.Primary>
         ) : null}
@@ -442,15 +449,15 @@ export function ScheduleSection({
                   <option key={zone} value={zone} />
                 ))}
               </datalist>
-              {browserZone() && draft.timezone !== browserZone() ? (
+              {localZone && draft.timezone !== localZone ? (
                 <Button
                   variant="ghost"
                   size="sm"
                   className="self-start"
                   disabled={busy}
-                  onClick={() => setDraft({ ...draft, timezone: browserZone() })}
+                  onClick={() => setDraft({ ...draft, timezone: localZone })}
                 >
-                  Use {browserZone()}
+                  Use {localZone}
                 </Button>
               ) : null}
 
