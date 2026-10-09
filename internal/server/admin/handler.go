@@ -382,7 +382,21 @@ func (h *Handler) routes() {
 }
 func (h *Handler) routingPayload(c *config.Config) map[string]any {
 	entries := deriveRoutings(c, h.deps.Prices)
-	return map[string]any{"tiers": tiers(entries), "routings": entries}
+	out := map[string]any{"tiers": tiers(entries), "routings": entries}
+	// With a schedule, also say which window applies now and which models each
+	// routing uses at this moment, so the dashboard can show both.
+	// One timestamp for both, so a window change between the calls cannot name one
+	// window and return another window's models.
+	now := h.deps.Now()
+	if status := routing.Status(c.Routing.Schedule, now); status != nil {
+		out["schedule"] = status
+		effective := map[string][]string{}
+		for _, entry := range routing.EffectiveRoutings(c, routing.Deps{Prices: h.deps.Prices, Now: func() int64 { return now.UnixMilli() }}) {
+			effective[entry.ID] = entry.Models
+		}
+		out["effective"] = effective
+	}
+	return out
 }
 func (h *Handler) brainSource(b config.BrainConfig) string {
 	if h.deps.Credentials.Get(brain.CredentialName(b.Channel)) != "" {
@@ -648,6 +662,10 @@ func (h *Handler) saveRouting(w http.ResponseWriter, r *http.Request) {
 			} else {
 				rc["mode"] = "auto"
 			}
+		}
+		// null (or an empty object) removes the schedule; config.ParseConfig validates the rest.
+		if x, ok := b["schedule"]; ok {
+			rc["schedule"] = x
 		}
 		for _, k := range []string{"baselineModel", "defaultEffort"} {
 			if s, ok := b[k].(string); ok {

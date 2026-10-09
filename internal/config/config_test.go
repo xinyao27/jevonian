@@ -261,6 +261,28 @@ func TestLoadMissingFileReturnsDefault(t *testing.T) {
 	}
 }
 
+func TestLoadMissingFileHonoursJevonianPort(t *testing.T) {
+	t.Setenv("JEVONIAN_CONFIG", filepath.Join(t.TempDir(), "missing.json"))
+	t.Setenv("JEVONIAN_PORT", "8807")
+	cfg, _, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Listen.Port != 8807 {
+		t.Fatalf("port = %d, want 8807 from JEVONIAN_PORT", cfg.Listen.Port)
+	}
+	for _, bad := range []string{"", "oops", "0", "-3"} {
+		t.Setenv("JEVONIAN_PORT", bad)
+		cfg, _, err := Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Listen.Port != 8787 {
+			t.Fatalf("JEVONIAN_PORT=%q: port = %d, want the default 8787", bad, cfg.Listen.Port)
+		}
+	}
+}
+
 func TestLoadReadsJSONCFile(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")

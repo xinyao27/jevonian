@@ -63,6 +63,12 @@ type harness struct {
 
 func setup(t *testing.T, source admin.LogSource) *harness {
 	t.Helper()
+	return setupAt(t, source, time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC))
+}
+
+// setupAt is setup with a fixed clock, for tests that depend on the time of day.
+func setupAt(t *testing.T, source admin.LogSource, now time.Time) *harness {
+	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("CODEX_HOME", filepath.Join(dir, ".codex"))
@@ -75,7 +81,7 @@ func setup(t *testing.T, source admin.LogSource) *harness {
 			return &routing.Price{Input: 2, Output: 4}
 		}
 		return nil
-	}, Now: func() time.Time { return time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC) }})
+	}, Now: func() time.Time { return now }})
 	return x
 }
 func request(t *testing.T, h http.Handler, method, path string, payload any) (int, map[string]any) {

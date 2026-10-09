@@ -66,6 +66,39 @@ Windows come from the live usage endpoints, captured response headers, or the le
 
 See [providers.md](providers.md#usage-and-limits) for where each source comes from.
 
+## Schedules
+
+A schedule swaps the models of a routing by time of day. Use it when a provider costs less at some hours, for example an off-peak or night discount.
+
+```json
+{
+  "routing": {
+    "schedule": {
+      "timezone": "Asia/Singapore",
+      "windows": [{ "id": "off-nights", "label": "Off-nights", "start": "22:00", "end": "08:00" }]
+    },
+    "routings": [
+      {
+        "id": "plan",
+        "label": "Plan",
+        "models": ["qwen3.7-max", "glm-5.3"],
+        "windows": { "off-nights": ["qwen3.8-max", "qwen3.7-max"] }
+      }
+    ]
+  }
+}
+```
+
+- A window is a daily time range in the schedule's time zone. `start` is included and `end` is excluded. When `end` is before `start`, the window runs past midnight.
+- Windows are checked in order. The first window that contains the current time is active.
+- While a window is active, each routing that lists models for it uses that list. Every other routing, and every routing outside all windows, uses its own `models`.
+- A window list is a normal fallback chain. Provider order (`providers`) applies as usual.
+- `timezone` is an IANA name. An empty value means the time zone of the machine that runs Jevonian.
+- `jevonian/<routing>` and `x-jevonian-phase` use the active window too. A pinned model is never changed.
+- Deleting a window also deletes the lists that belong to it.
+
+Set it up in the dashboard: on **Models & Routing**, open **Schedule** and choose **Edit schedule** to set the time zone and the windows. Then choose **Customize** on a task and turn on **Models by time** for each window. The Schedule card shows which models run now, which window is active, and when it changes next. `jevonian doctor`, the startup banner, `GET /api/state` and `GET /api/tiers` report the same.
+
 ## Canonical models
 
 The same model is spelled differently per provider (`claude-sonnet-4-6` on Anthropic, `anthropic/claude-sonnet-4.6` on OpenRouter, dated snapshot ids like `claude-haiku-4-5-20251001`). Jevonian normalizes these into a canonical id — provider prefix stripped, case folded, dots become dashes, trailing date stamps and `-tiered` removed — so tiers and pinned requests can name the model once and let routing pick the provider:

@@ -13,6 +13,19 @@ var routingIDRe = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
 
 const maxPromptPatternLength = 500
 
+// envPort is JEVONIAN_PORT when it holds a positive integer, else 0
+// (src/config.ts: Number.isInteger(envPort) && envPort > 0).
+func envPort() int {
+	raw := strings.TrimSpace(os.Getenv("JEVONIAN_PORT"))
+	if raw == "" {
+		return 0
+	}
+	if p, err := strconv.Atoi(raw); err == nil && p > 0 {
+		return p
+	}
+	return 0
+}
+
 // ParseConfig builds a Config from a decoded JSON object (map[string]any or nil).
 // Missing sections fall back to the same defaults as src/config.ts parseConfig.
 func ParseConfig(raw any) (Config, error) {
@@ -28,10 +41,8 @@ func ParseConfig(raw any) (Config, error) {
 	if p, ok := asInt(listen["port"]); ok && p > 0 {
 		port = p
 	}
-	if envPort := strings.TrimSpace(os.Getenv("JEVONIAN_PORT")); envPort != "" {
-		if p, err := strconv.Atoi(envPort); err == nil && p > 0 {
-			port = p
-		}
+	if p := envPort(); p > 0 {
+		port = p
 	}
 
 	var providers []Provider
@@ -354,6 +365,12 @@ func parseRouting(raw any) (RoutingConfig, error) {
 	if de, ok := value["defaultEffort"].(string); ok && reasoningEfforts[de] {
 		rc.DefaultEffort = de
 	}
+	schedule, err := parseSchedule(value["schedule"])
+	if err != nil {
+		return RoutingConfig{}, err
+	}
+	rc.Schedule = schedule
+	pruneWindows(rc.Routings, schedule)
 	return rc, nil
 }
 
@@ -421,7 +438,9 @@ func parseRoutingEntry(raw any, index int) (RoutingEntry, error) {
 	if providersRaw == nil {
 		providersRaw = value["providerOrder"]
 	}
-	providers := pruneProviderOrder(models, parseProviderOrder(providersRaw))
+	windows := parseRoutingWindows(value["windows"])
+	// Provider order covers the routing's own models and the ones it lists for a window.
+	providers := pruneProviderOrder(routingModels(models, windows), parseProviderOrder(providersRaw))
 	entry := RoutingEntry{
 		ID:          id,
 		Label:       strings.TrimSpace(label),
@@ -433,6 +452,9 @@ func parseRoutingEntry(raw any, index int) (RoutingEntry, error) {
 	}
 	if effort, ok := value["effort"].(string); ok && reasoningEfforts[effort] {
 		entry.Effort = effort
+	}
+	if windows != nil {
+		entry.Windows = windows
 	}
 	return entry, nil
 }

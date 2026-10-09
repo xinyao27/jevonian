@@ -104,6 +104,29 @@ type RoutingEntry struct {
 	Models      []string            `json:"models"`
 	Providers   map[string][]string `json:"providers,omitempty"`
 	Effort      string              `json:"effort,omitempty"`
+	// Windows maps a schedule window id to the models this routing uses while that
+	// window is active. A window with no entry here uses Models.
+	Windows map[string][]string `json:"windows,omitempty"`
+}
+
+// ScheduleWindow is a daily time range in the schedule's time zone. A routing can
+// list its own models for the range, for example cheaper models during an off-peak
+// discount.
+type ScheduleWindow struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	// Start is included and End is excluded, both as HH:MM. A window whose End is
+	// before its Start runs past midnight (22:00 to 08:00 covers the night).
+	Start string `json:"start"`
+	End   string `json:"end"`
+}
+
+// ScheduleConfig swaps routing model lists by time of day. Windows are checked in
+// order and the first one that contains the current time wins.
+type ScheduleConfig struct {
+	// Timezone is an IANA name such as Asia/Singapore. Empty means the machine's zone.
+	Timezone string           `json:"timezone"`
+	Windows  []ScheduleWindow `json:"windows"`
 }
 
 // RoutingTiers mirrors the four builtins for older configs/callers.
@@ -152,6 +175,8 @@ type RoutingConfig struct {
 	Capacities        map[string]ModelCapacityConfig `json:"capacities,omitempty"`
 	DefaultEffort     string                         `json:"defaultEffort,omitempty"`
 	BrainPicksEffort  bool                           `json:"brainPicksEffort"`
+	// Schedule is nil when no time windows are configured.
+	Schedule *ScheduleConfig `json:"schedule,omitempty"`
 }
 
 // TunnelConfig is optional public tunnel exposure.

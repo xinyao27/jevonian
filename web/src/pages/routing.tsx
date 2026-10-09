@@ -22,6 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { RoutingSkeleton } from "@/components/page-skeletons";
 import { ProviderIdentity } from "@/components/provider-identity";
 import { ProviderLogo } from "@/components/provider-logo";
+import { ScheduleSection } from "@/components/schedule-section";
 import {
   api,
   type ProviderView,
@@ -31,9 +32,11 @@ import {
   type CanonicalModelView,
   type ModelView,
   type QuotaHealthView,
+  type ScheduleView,
   type TokenSaverConfigView,
 } from "@/lib/api";
 import { providerDisplayName, resolveProviderIdentity } from "@/lib/provider-name";
+import { offersTimeBasedModels, pruneWindowLists, windowRange } from "@/lib/schedule";
 
 import {
   allowedProviders,
@@ -274,6 +277,27 @@ export function RoutingPage({
     () => new Map((state?.routings ?? []).map((entry) => [entry.id, entry.models])),
     [state],
   );
+  const schedule = state?.config.routing.schedule;
+  const scheduleStatus = state?.schedule;
+  // What each task runs on right now. `derived` ignores the active window, but a window that
+  // changes one task's models also changes what the automatic tasks after it can pick.
+  const effective = state?.effective;
+  // The active window changes with the clock, not with the config, so keep it fresh.
+  const hasSchedule = Boolean(schedule);
+  useEffect(() => {
+    if (!hasSchedule) return;
+    const timer = window.setInterval(() => {
+      api
+        .routingNow()
+        .then((now) =>
+          setState((current) =>
+            current ? { ...current, schedule: now.schedule, effective: now.effective } : current,
+          ),
+        )
+        .catch(() => {});
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [hasSchedule]);
   const route = editingId === NEW_ROUTE ? newRoute : drafts.find((entry) => entry.id === editingId);
   const fixed =
     editingId === NEW_ROUTE ? fixedNew : Boolean(route?.models.length || fixedEmpty === editingId);
@@ -338,6 +362,14 @@ export function RoutingPage({
     });
     setFixedEmpty(editingId);
   }
+  /** Sets the models a task uses during one schedule window. Undefined means "same as the default". */
+  function setWindowModels(windowId: string, list: string[] | undefined) {
+    if (!route) return;
+    const windows = { ...route.windows };
+    if (list === undefined) delete windows[windowId];
+    else windows[windowId] = list;
+    updateRoute({ windows: Object.keys(windows).length ? windows : undefined });
+  }
   async function persist(routes: RoutingEntryView[], quotaGuard?: QuotaGuardView) {
     setBusy(true);
     setError("");
@@ -361,6 +393,8 @@ export function RoutingPage({
               ...current,
               config: { ...current.config, routing: result.routing },
               routings: result.routings,
+              schedule: result.schedule,
+              effective: result.effective,
             }
           : current,
       );
@@ -370,6 +404,42 @@ export function RoutingPage({
     } catch (cause) {
       setError(String(cause));
       return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+  /** Saves the schedule (null removes it). Returns an error message, or null on success. */
+  async function saveSchedule(next: ScheduleView | null): Promise<string | null> {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      // Lists for windows that no longer exist go with them.
+      const result = await api.saveRouting({
+        routings: pruneWindowLists(savedRef.current, next),
+        schedule: next,
+      });
+      const previous = savedRef.current;
+      savedRef.current = result.routing.routings;
+      setDrafts((current) =>
+        mergeRoutingDrafts(result.routing.routings, current, previous),
+      );
+      setState((current) =>
+        current
+          ? {
+              ...current,
+              config: { ...current.config, routing: result.routing },
+              routings: result.routings,
+              schedule: result.schedule,
+              effective: result.effective,
+            }
+          : current,
+      );
+      setMessage(next ? "Schedule saved" : "Schedule removed");
+      onChanged?.();
+      return null;
+    } catch (cause) {
+      return cause instanceof Error ? cause.message : String(cause);
     } finally {
       setBusy(false);
     }
@@ -630,10 +700,35 @@ export function RoutingPage({
               Add task
             </Button>
           </div>
+          {schedule || offersTimeBasedModels(state?.config.providers ?? []) ? (
+            <ScheduleSection
+              routes={drafts}
+              schedule={schedule}
+              status={scheduleStatus}
+              derived={derived}
+              effective={effective}
+              names={names}
+              disabled={busy || editingId !== null}
+              onCustomize={(id) => {
+                setEditingId(id);
+                setConfirmClose(false);
+                setConfirmDelete(false);
+              }}
+              onSave={saveSchedule}
+            />
+          ) : null}
           <div className="divide-y divide-kumo-hairline rounded-lg border border-kumo-hairline">
             {drafts.map((entry) => {
               const automatic = entry.models.length === 0;
-              const chain = automatic ? (derived.get(entry.id) ?? []) : entry.models;
+              // While a window is active and lists models for this task, those models run now.
+              const timed = scheduleStatus?.active
+                ? entry.windows?.[scheduleStatus.active]
+                : undefined;
+              const chain = timed?.length
+                ? timed
+                : automatic
+                  ? (effective?.[entry.id] ?? derived.get(entry.id) ?? [])
+                  : entry.models;
               const shown = chain.slice(0, 3);
               return (
                 <div
@@ -650,7 +745,12 @@ export function RoutingPage({
                     </p>
                     <p className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs">
                       <span className="text-kumo-subtle">
-                        {automatic ? "Automatic" : "Fixed"} ·
+                        {timed?.length
+                          ? `Now · ${scheduleStatus?.activeLabel ?? scheduleStatus?.active}`
+                          : automatic
+                            ? "Automatic"
+                            : "Fixed"}{" "}
+                        ·
                       </span>
                       {shown.length ? (
                         shown.map((id, index) => {
@@ -991,6 +1091,124 @@ export function RoutingPage({
                     </>
                   )}
                 </fieldset>
+                {schedule?.windows.length ? (
+                  <fieldset disabled={busy} className="space-y-3">
+                    <legend className="mb-2 text-sm font-medium">Models by time</legend>
+                    <p className="text-xs text-kumo-subtle">
+                      Use other models while a time window is active. Outside every window, and in
+                      windows left off, the models above run.
+                    </p>
+                    {schedule.windows.map((slot) => {
+                      const list = route.windows?.[slot.id];
+                      const slotOptions = options.filter(
+                        (option) => !(list ?? []).includes(option.value),
+                      );
+                      return (
+                        <div
+                          key={slot.id}
+                          className="space-y-3 rounded-lg border border-kumo-hairline p-3"
+                        >
+                          <label className="flex items-start gap-2 text-sm">
+                            <input
+                              type="checkbox"
+                              checked={list !== undefined}
+                              onChange={(event) =>
+                                setWindowModels(
+                                  slot.id,
+                                  event.target.checked
+                                    ? [
+                                        ...(route.models.length
+                                          ? route.models
+                                          : (derived.get(route.id) ?? [])),
+                                      ]
+                                    : undefined,
+                                )
+                              }
+                            />
+                            <span>
+                              {slot.label} · {windowRange(slot)}
+                              {scheduleStatus?.active === slot.id ? " · now" : ""}
+                              <br />
+                              <span className="text-xs text-kumo-subtle">
+                                Use different models in this window
+                              </span>
+                            </span>
+                          </label>
+                          {list !== undefined ? (
+                            <>
+                              <OrderedList
+                                items={list}
+                                onChange={(next) => setWindowModels(slot.id, next)}
+                              >
+                                {(model, index) => (
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="min-w-0">
+                                      <p className="break-words text-sm font-medium">
+                                        {index + 1}. {names.get(model) || model}
+                                      </p>
+                                      {names.get(model) ? (
+                                        <p className="break-words text-xs text-kumo-subtle">
+                                          {model}
+                                        </p>
+                                      ) : null}
+                                    </div>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      aria-label={`Remove ${model} from ${slot.label}`}
+                                      onClick={() =>
+                                        setWindowModels(
+                                          slot.id,
+                                          list.filter((id) => id !== model),
+                                        )
+                                      }
+                                    >
+                                      <X size={16} aria-hidden />
+                                    </Button>
+                                  </div>
+                                )}
+                              </OrderedList>
+                              <Combobox
+                                label={`Add model for ${slot.label}`}
+                                items={slotOptions}
+                                itemToStringLabel={(option: any) =>
+                                  option?.label ?? option?.value ?? ""
+                                }
+                                value={null}
+                                onValueChange={(option: any) => {
+                                  const value =
+                                    typeof option === "string" ? option : option?.value;
+                                  if (value && !list.includes(value))
+                                    setWindowModels(slot.id, [...list, value]);
+                                }}
+                              >
+                                <Combobox.Input
+                                  placeholder="Search model id, name, or provider…"
+                                  aria-label={`Add model for ${slot.label}`}
+                                />
+                                <Combobox.Content>
+                                  <Combobox.Empty>No matching model is available.</Combobox.Empty>
+                                  <Combobox.List>
+                                    {(option: any) => (
+                                      <Combobox.Item key={option.value} value={option}>
+                                        <span className="flex-1 truncate">{option.label}</span>
+                                        {option.hint ? (
+                                          <span className="text-xs text-kumo-subtle">
+                                            {option.hint}
+                                          </span>
+                                        ) : null}
+                                      </Combobox.Item>
+                                    )}
+                                  </Combobox.List>
+                                </Combobox.Content>
+                              </Combobox>
+                            </>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </fieldset>
+                ) : null}
                 {error ? (
                   <p role="alert" className="text-sm text-kumo-danger">
                     {error}

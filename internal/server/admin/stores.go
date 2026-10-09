@@ -33,7 +33,7 @@ func OpenSQLiteLogs(path string) (*SQLiteLogs, error) {
 	if err != nil {
 		return nil, err
 	}
-	dsn := url.URL{Scheme: "file", Path: abs}
+	dsn := paths.SQLiteFileURL(abs)
 	params := url.Values{}
 	params.Add("_pragma", "busy_timeout(5000)")
 	dsn.RawQuery = params.Encode()

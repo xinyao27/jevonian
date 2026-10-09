@@ -448,7 +448,7 @@ func decideVirtual(ctx context.Context, deps Deps, input Input, cfg *config.Conf
 	t := &turnCtx{
 		deps: deps, input: input, cfg: cfg, now: now,
 		cacheTTLMs: cacheTTL.Milliseconds(),
-		routings:   DeriveRoutings(cfg, deps),
+		routings:   EffectiveRoutings(cfg, deps),
 		signals:    ClassifyPhase(input.Body, input.Kind),
 		affinity:   AffinityAuto,
 		resetOrder: resetOrder,

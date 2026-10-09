@@ -134,6 +134,50 @@ While no Jevonian key exists, the proxy stays open for first-run convenience. On
 
 Every client below ends up talking to the same endpoint with a Jevonian key (`sk-jev-…`) and the model `jevonian/auto`. The only difference is how each one is pointed at it.
 
+### Quick start: Claude Code, OpenCode and PI Agent
+
+The shortest working path for each client, run on a clean config. The commands are the same on Windows, macOS and Linux. Add `JEVONIAN_PORT=<port>` in front of every `jevonian` command (or set it once) to use a port other than 8787.
+
+**Install.** `npm install --global jevonian` is enough once a release has the fixes from this branch (Claude login on Sonnet and Opus, Windows start-up). Until then, build it (about 20 seconds with warm caches; needs Node 22+, pnpm and Go 1.26+):
+
+```bash
+git clone --branch feat/routing-schedule https://github.com/piratchai/jevonian.git
+cd jevonian && pnpm install --frozen-lockfile && pnpm web:build
+go build -o jevonian ./cmd/jevonian        # on Windows: -o jevonian.exe
+```
+
+**Claude Code, on your Claude login (no other account).** Do not run `jevonian init` first: its example config adds a DeepSeek provider.
+
+```bash
+jevonian add claude-subscription
+jevonian serve --foreground                 # leave this running; open another terminal
+jevonian launch claude --model jevonian/execute
+```
+
+`jevonian/auto` needs a [routing brain](docs/brain.md), so start from an explicit route as above. See "With only a Claude login and no routing brain" below.
+
+**OpenCode and PI Agent, on an API-key provider** (the example is an OpenAI-compatible Alibaba endpoint; any provider works):
+
+```bash
+export ALIBABA_API_KEY=...                  # Windows cmd: set ALIBABA_API_KEY=...
+jevonian add custom --name alibaba --type openai --env ALIBABA_API_KEY \
+  --base-url https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1 \
+  --models qwen3.6-flash,qwen3.7-plus
+jevonian serve --foreground                 # leave this running; the key variable must be set here too
+jevonian keys create opencode               # prints sk-jev-... once; make one more for pi
+```
+
+Then give each client its key and the endpoint, as in the OpenCode and PI Agent sections below, and ask for `jevonian/execute`:
+
+```bash
+opencode run -m jevonian/execute "explain this repo"      # a project opencode.json works as well as the global one
+pi --provider jevonian --model jevonian/execute -p "explain this repo"
+```
+
+If a thinking model fails with `max_completion_tokens must be greater than thinking_budget`, add `"defaultEffort": "low"` under `routing` in the config file and restart `serve`.
+
+Check each first turn in **Logs** on that instance's dashboard: it shows the model and provider that served it.
+
 ### Cursor
 
 Cursor runs in the cloud and only accepts a **public HTTPS** URL for a custom OpenAI endpoint, so `http://127.0.0.1:8787/v1` will not work — you need a tunnel. Jevonian's tunnel is an explicit opt-in that publishes nothing but `/v1`:
@@ -167,9 +211,110 @@ jevonian launch claude
 jevonian launch claude --model jevonian/auto -- -p "summarize this repo"
 ```
 
+**With only a Claude login and no routing brain.** `launch claude` starts on `jevonian/auto`, and `auto` needs a [routing brain](docs/brain.md). Without one, the router answers HTTP 400 ("No Jev brain is configured"), and Claude Code only prints an `unrecognized_model` warning. Start from an explicit route instead:
+
+```bash
+jevonian add claude-subscription        # do not run `jevonian init` first: its example config adds a DeepSeek provider
+jevonian serve
+jevonian launch claude --model jevonian/execute
+```
+
+`jevonian/execute` serves the Opus, Sonnet and subagent slots, and `jevonian/utility` serves the Haiku slot. The routes that `add` picks are the strongest Claude models for every task (for example Fable for utility and chat). To spend less, set Plan to Opus, Execute to Sonnet, and Utility and Chat to Haiku under **Models & Routing**. Claude plans cost the same at every hour, so the **Schedule** card is hidden when every provider is a Claude login.
+
 ### ChatGPT / Codex
 
 **Connect ChatGPT** on the **Clients** page writes `~/.codex/config.toml` (`openai_base_url` plus an injected model catalog) and points the Codex desktop app at the loopback endpoint. An existing `auth.json` login is never overwritten.
+
+### OpenCode
+
+OpenCode v2 reads providers from `~/.config/opencode/opencode.json`. Create a key on the **Keys** page first. With a Jevonian key, the bare route names (`plan`, `execute`, `utility`, `chat`, `auto`) all route. Without one, only `auto` and `jevonian/*` names route; any other name is treated as a native OpenAI model.
+
+```json
+{
+  "providers": {
+    "jevonian": {
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": { "baseURL": "http://127.0.0.1:8787/v1", "apiKey": "sk-jev-…" },
+      "models": {
+        "auto": {
+          "name": "Jevonian Auto",
+          "package": "@opencode/ai/providers/openai-compatible",
+          "capabilities": { "tools": true, "input": ["text"], "output": ["text"] }
+        },
+        "plan": {
+          "name": "Jevonian Plan",
+          "package": "@opencode/ai/providers/openai-compatible",
+          "capabilities": { "tools": true, "input": ["text"], "output": ["text"] }
+        },
+        "execute": {
+          "name": "Jevonian Execute",
+          "package": "@opencode/ai/providers/openai-compatible",
+          "capabilities": { "tools": true, "input": ["text"], "output": ["text"] }
+        },
+        "utility": {
+          "name": "Jevonian Utility",
+          "package": "@opencode/ai/providers/openai-compatible",
+          "capabilities": { "tools": true, "input": ["text"], "output": ["text"] }
+        },
+        "chat": {
+          "name": "Jevonian Chat",
+          "package": "@opencode/ai/providers/openai-compatible",
+          "capabilities": { "tools": true, "input": ["text"], "output": ["text"] }
+        }
+      }
+    }
+  }
+}
+```
+
+Then run `opencode run -m jevonian/auto "…"`.
+
+### PI Agent
+
+PI Agent reads `~/.pi/agent/models.json` (or the folder in `PI_CODING_AGENT_DIR`). Point an OpenAI-compatible provider at Jevonian and give it a Jevonian key:
+
+```json
+{
+  "providers": {
+    "jevonian": {
+      "baseUrl": "http://127.0.0.1:8787/v1",
+      "api": "openai-completions",
+      "apiKey": "$JEVONIAN_API_KEY",
+      "models": [{ "id": "jevonian/auto" }, { "id": "jevonian/plan" }, { "id": "jevonian/execute" }]
+    }
+  }
+}
+```
+
+Then run `pi --provider jevonian --model jevonian/auto`.
+
+### One instance per client
+
+By default every client shares the one Jevonian on port 8787. To give a client its own port, ledger and keys, run another instance with its own config file and data folder:
+
+```bash
+# macOS and Linux (bash, zsh)
+export JEVONIAN_CONFIG=~/.config/jevonian/config-pi.json
+export JEVONIAN_DATA_DIR=~/.local/share/jevonian-pi
+export JEVONIAN_PORT=8788
+jevonian serve --foreground
+```
+
+```bat
+:: Windows (cmd)
+set JEVONIAN_CONFIG=%USERPROFILE%\.config\jevonian\config-pi.json
+set JEVONIAN_DATA_DIR=%USERPROFILE%\.local\share\jevonian-pi
+set JEVONIAN_PORT=8788
+jevonian serve --foreground
+```
+
+- The port is `listen.port` in that config file. `JEVONIAN_PORT` overrides it for the process, also when the config file does not exist yet. A command that rewrites the config (for example `jevonian add`) saves the port that is in effect, so the port you set while you run it is kept.
+- `jevonian launch claude` reads the same config and variables, so set the same ones when you launch.
+- **macOS:** plain `jevonian serve`, `start`, `stop` and `restart` manage one LaunchAgent that serves the default config. Start every extra instance with `serve --foreground`, as above, so the LaunchAgent is not touched; stop it with Ctrl+C. Linux and Windows have no background service, so `serve` always runs in the foreground there.
+- **Linux and macOS:** the config and data folders are `$XDG_CONFIG_HOME/jevonian` and `$XDG_DATA_HOME/jevonian` when those variables are set, else `~/.config/jevonian` and `~/.local/share/jevonian`.
+- The ledger, the logs and the Jevonian keys (`keys.json`) live in the data folder, so each instance has its own. Create one key per instance on its **Keys** page.
+- Provider keys in `credentials.json` are shared by every instance, unless `JEVONIAN_CREDENTIALS` points somewhere else.
+- Point each client's `baseURL` at the port of its own instance: `http://127.0.0.1:8788/v1` in the PI Agent example above.
 
 ### Anything else
 

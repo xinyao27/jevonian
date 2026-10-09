@@ -514,6 +514,9 @@ func printServeBanner(out io.Writer, cfg config.Config, addr string) {
 		routingLine += " (models: " + strings.Join(models, ", ") + ")"
 	}
 	fmt.Fprintln(out, routingLine)
+	for _, line := range scheduleLines(&cfg, time.Now()) {
+		fmt.Fprintln(out, line)
+	}
 	info := loadPricing()
 	fmt.Fprintf(out, "pricing: %s (%d models)\n", cliPricingSource(info), len(info.Models))
 }

@@ -58,6 +58,7 @@ Config lives at `~/.config/jevonian/config.json`. Everything in it is editable f
 | `capacities`        | —        | per-model overrides for context window, max output, and supported efforts               |
 | `defaultEffort`     | —        | thinking level used when the brain does not pick one                                    |
 | `brainPicksEffort`  | `true`   | whether the brain is asked to choose a thinking level                                   |
+| `schedule`          | —        | time zone and daily windows that swap models; see [Schedules](routing.md#schedules)     |
 
 Prefer editing `routings`; `tiers` is kept in sync for older callers.
 
@@ -83,6 +84,8 @@ providers restricts the model to exactly those — so removing one from the list
 using it. An explicit empty list (`[]`) withholds the model entirely. The Routing page writes
 this field as you add and remove provider chips, and a list that matches discovery in order is
 dropped rather than stored. The older name for this field, `providerOrder`, still loads.
+
+Each routing may also carry `windows`, a map from a schedule window id to the models the routing uses while that window is active. A window with no entry uses `models`. See [Schedules](routing.md#schedules).
 
 ## Model auto-sync
 
@@ -178,6 +181,7 @@ touches messages that already carry tool output, so a fresh first turn is sent b
 | Variable                        | Overrides                                                                         |
 | ------------------------------- | --------------------------------------------------------------------------------- |
 | `JEVONIAN_CONFIG`               | config path                                                                       |
+| `JEVONIAN_PORT`                 | listen port; overrides `listen.port`, also when there is no config file yet       |
 | `JEVONIAN_CREDENTIALS`          | credentials path                                                                  |
 | `JEVONIAN_DATA_DIR`             | data directory (ledger, catalog, pricing, quota)                                  |
 | `JEVONIAN_LEDGER`               | ledger path                                                                       |

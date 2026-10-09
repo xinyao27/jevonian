@@ -7,12 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/xinyao27/jevonian/internal/paths"
 	_ "modernc.org/sqlite"
 )
 
@@ -151,7 +151,7 @@ func Open(path string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ledger: absolute path: %w", err)
 	}
-	u := url.URL{Scheme: "file", Path: abs}
+	u := paths.SQLiteFileURL(abs)
 	q := u.Query()
 	q.Add("_pragma", "busy_timeout(5000)")
 	q.Add("_pragma", "foreign_keys(1)")

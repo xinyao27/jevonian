@@ -338,8 +338,12 @@ func (c commandContext) doctor(a arguments) error {
 		}
 		fmt.Fprintf(c.out, " billing=%s credential=%s models=%d\n", p.Billing, source, len(p.Models))
 	}
-	routings := routing.DeriveRoutings(&cfg, pricingDeps())
+	// Show what routing uses right now: with a schedule, the active window's models.
+	routings := routing.EffectiveRoutings(&cfg, pricingDeps())
 	fmt.Fprintf(c.out, "\nrouting: %s\n", c.styleValue(cfg.Routing.Mode))
+	for _, line := range scheduleLines(&cfg, time.Now()) {
+		fmt.Fprintf(c.out, "  %s\n", line)
+	}
 	for _, r := range routings {
 		models := strings.Join(r.Models, ", ")
 		if models == "" {

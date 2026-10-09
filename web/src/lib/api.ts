@@ -130,6 +130,41 @@ export interface RoutingEntryView {
    * Absent → every provider that serves the model. Empty → the model is withheld.
    */
   providers?: Record<string, string[]>;
+  /**
+   * Models this routing uses while a schedule window is active, keyed by window id.
+   * A window with no entry uses `models`.
+   */
+  windows?: Record<string, string[]>;
+}
+
+/** A daily time range in the schedule's time zone. `end` before `start` runs past midnight. */
+export interface ScheduleWindowView {
+  id: string;
+  label: string;
+  /** HH:MM, included. */
+  start: string;
+  /** HH:MM, excluded. */
+  end: string;
+}
+
+export interface ScheduleView {
+  /** IANA name such as Asia/Singapore. Empty means the machine running Jevonian. */
+  timezone: string;
+  windows: ScheduleWindowView[];
+}
+
+/** Which window applies right now, from the server's clock. */
+export interface ScheduleStatusView {
+  timezone: string;
+  /** RFC 3339 in the schedule's time zone. */
+  now: string;
+  /** Id of the active window. Empty when no window applies. */
+  active: string;
+  activeLabel?: string;
+  /** RFC 3339 time when the applicable window next changes. */
+  nextChange?: string;
+  /** Window id that applies after `nextChange`. Absent when none does. */
+  nextActive?: string;
 }
 
 export interface RoutingView {
@@ -146,6 +181,8 @@ export interface RoutingView {
   /** Per-model overrides for what the models.dev catalog states. */
   capacities?: Record<string, ModelCapacityView>;
   brains: BrainView[];
+  /** Absent when no time windows are configured. */
+  schedule?: ScheduleView;
 }
 
 export interface KeyView {
@@ -292,6 +329,10 @@ export interface StateResponse {
   };
   tiers: { plan: string[]; execute: string[]; utility: string[]; chat: string[] };
   routings: RoutingEntryView[];
+  /** Present only when a schedule is configured. */
+  schedule?: ScheduleStatusView;
+  /** Models each routing uses at this moment (the active window's lists applied). */
+  effective?: Record<string, string[]>;
   pricing: { source: string; models: number };
   keys: KeyView[];
   brainChannels: BrainChannelView[];
@@ -886,15 +927,29 @@ export const api = {
       { method: "POST", body: JSON.stringify({ direction }) },
     ),
   // Leave policy fields to server defaults or existing configuration.
-  saveRouting: (payload: { routings: RoutingEntryView[]; quotaGuard?: Partial<QuotaGuardView> }) =>
+  // `schedule: null` removes the schedule; leaving it out keeps the current one.
+  saveRouting: (payload: {
+    routings: RoutingEntryView[];
+    quotaGuard?: Partial<QuotaGuardView>;
+    schedule?: ScheduleView | null;
+  }) =>
     request<{
       routing: RoutingView;
       tiers: RoutingView["tiers"];
       routings: RoutingEntryView[];
+      schedule?: ScheduleStatusView;
+      effective?: Record<string, string[]>;
     }>("/api/routing", {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
+  /** Light refresh of the active window and per-routing models; the clock moves, config does not. */
+  routingNow: () =>
+    request<{
+      routings: RoutingEntryView[];
+      schedule?: ScheduleStatusView;
+      effective?: Record<string, string[]>;
+    }>("/api/tiers"),
   testBrain: (payload?: Partial<BrainView> & { apiKey?: string }) =>
     request<{
       ok: boolean;

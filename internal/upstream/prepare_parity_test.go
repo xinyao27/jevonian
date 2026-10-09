@@ -156,6 +156,27 @@ func TestClaudeSubscriptionNativeBodyAndIdentity(t *testing.T) {
 			t.Fatalf("legacy model kept adaptive fields: %v", body)
 		}
 	})
+	t.Run("adaptive model also drops context_management but keeps output_config", func(t *testing.T) {
+		// Claude Code sends context_management for Sonnet and Opus. The OAuth wire has no
+		// beta header for it, so Anthropic answers 400 "Extra inputs are not permitted".
+		body, hdr, _, at := capture(t, p, AttemptRequest{ClientKind: KindAnthropic, ClientBody: wire.Body{
+			"max_tokens": 10, "output_config": map[string]any{"effort": "high"},
+			"context_management": map[string]any{"edits": []any{map[string]any{"type": "clear_thinking_20251015"}}},
+			"messages":           []any{map[string]any{"role": "user", "content": "hi"}},
+		}}, "claude-sonnet-5", reply, "application/json")
+		if at.Outcome.Kind != OutcomeSuccess {
+			t.Fatalf("%+v %v", at.Outcome, at.Err)
+		}
+		if body["context_management"] != nil {
+			t.Fatalf("context_management reached Anthropic without its beta header: %v", body)
+		}
+		if body["output_config"] == nil {
+			t.Fatalf("output_config is valid for adaptive models and must stay: %v", body)
+		}
+		if hdr.Get("Anthropic-Beta") != "oauth-2025-04-20" {
+			t.Fatalf("beta header = %q", hdr.Get("Anthropic-Beta"))
+		}
+	})
 	t.Run("API-key Anthropic provider gets no identity", func(t *testing.T) {
 		k := p
 		k.Auth, k.OAuthSource, k.APIKey = "api-key", "", "sk-ant"

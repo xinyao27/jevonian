@@ -190,3 +190,22 @@ func TestEmbeddedDashboard(t *testing.T) {
 		t.Fatal("no embedded JavaScript bundle")
 	}
 }
+
+func TestContentTypesDoNotDependOnTheHostRegistry(t *testing.T) {
+	for name, want := range map[string]string{
+		"index.html":        "text/html; charset=utf-8",
+		"assets/app.js":     "text/javascript; charset=utf-8",
+		"assets/app.CSS":    "text/css; charset=utf-8",
+		"assets/font.woff2": "font/woff2",
+		"favicon.png":       "image/png",
+		"logo.svg":          "image/svg+xml",
+	} {
+		if got := contentTypeOf(name); got != want {
+			t.Errorf("contentTypeOf(%q) = %q, want %q", name, got, want)
+		}
+	}
+	// Other types still use the system table.
+	if got := contentTypeOf("notes.pdf"); got != "" && !strings.HasPrefix(got, "application/pdf") {
+		t.Errorf("contentTypeOf(notes.pdf) = %q", got)
+	}
+}

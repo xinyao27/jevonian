@@ -105,8 +105,38 @@ func staticHandler(files fs.FS) http.Handler {
 	})
 }
 
+// contentTypes covers every file type the dashboard ships. It is checked before
+// mime.TypeByExtension because that function reads the host: on Windows it reads
+// the registry, where a wrong .js entry (text/plain) makes browsers refuse the
+// module scripts, and where the first lookup needs an extra OS thread that locked
+// down machines may refuse (the process then dies with "failed to create new OS
+// thread").
+var contentTypes = map[string]string{
+	".html":  "text/html; charset=utf-8",
+	".js":    "text/javascript; charset=utf-8",
+	".mjs":   "text/javascript; charset=utf-8",
+	".css":   "text/css; charset=utf-8",
+	".json":  "application/json",
+	".map":   "application/json",
+	".svg":   "image/svg+xml",
+	".png":   "image/png",
+	".ico":   "image/x-icon",
+	".webp":  "image/webp",
+	".woff2": "font/woff2",
+	".woff":  "font/woff",
+	".txt":   "text/plain; charset=utf-8",
+}
+
+func contentTypeOf(name string) string {
+	ext := strings.ToLower(path.Ext(name))
+	if contentType, ok := contentTypes[ext]; ok {
+		return contentType
+	}
+	return mime.TypeByExtension(ext)
+}
+
 func serveFile(w http.ResponseWriter, r *http.Request, name string, data []byte) {
-	if contentType := mime.TypeByExtension(path.Ext(name)); contentType != "" {
+	if contentType := contentTypeOf(name); contentType != "" {
 		w.Header().Set("Content-Type", contentType)
 	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")

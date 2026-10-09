@@ -186,7 +186,20 @@ func isExperimental(model string) bool {
 // cheapest; unpriced models only fill expensive slots and only after every
 // priced one. Declared models are kept and mark their price used.
 // src/routing.ts deriveRoutings.
+//
+// It reads only each routing's own model list, so it is safe to persist. Routing a
+// request uses EffectiveRoutings, which also applies the time schedule.
 func DeriveRoutings(cfg *config.Config, deps Deps) []config.RoutingEntry {
+	return deriveRoutings(cfg, deps, false)
+}
+
+// EffectiveRoutings is DeriveRoutings for the current moment: while a schedule
+// window is active, each routing that lists models for it uses them.
+func EffectiveRoutings(cfg *config.Config, deps Deps) []config.RoutingEntry {
+	return deriveRoutings(cfg, deps, true)
+}
+
+func deriveRoutings(cfg *config.Config, deps Deps, scheduled bool) []config.RoutingEntry {
 	declared := make([]config.RoutingEntry, len(cfg.Routing.Routings))
 	for i, entry := range cfg.Routing.Routings {
 		declared[i] = entry
@@ -198,6 +211,9 @@ func DeriveRoutings(cfg *config.Config, deps Deps) []config.RoutingEntry {
 			}
 			declared[i].Providers = providers
 		}
+	}
+	if scheduled {
+		declared = ApplySchedule(declared, cfg.Routing.Schedule, deps.clock())
 	}
 
 	seenAvail := map[string]bool{}
@@ -334,7 +350,7 @@ func DeriveTiers(cfg *config.Config, deps Deps) config.RoutingTiers {
 // RoutingByID returns the derived routing with id.
 // src/routing.ts routingById.
 func RoutingByID(cfg *config.Config, deps Deps, id string) *config.RoutingEntry {
-	for _, entry := range DeriveRoutings(cfg, deps) {
+	for _, entry := range EffectiveRoutings(cfg, deps) {
 		if entry.ID == id {
 			e := entry
 			return &e
@@ -346,7 +362,7 @@ func RoutingByID(cfg *config.Config, deps Deps, id string) *config.RoutingEntry 
 // PhaseOfModel is the routing a model is declared under. Reporting only —
 // routing never branches on it. src/routing.ts phaseOfModel.
 func PhaseOfModel(cfg *config.Config, deps Deps, model string) string {
-	for _, entry := range DeriveRoutings(cfg, deps) {
+	for _, entry := range EffectiveRoutings(cfg, deps) {
 		for _, m := range entry.Models {
 			if m == model {
 				return entry.ID
