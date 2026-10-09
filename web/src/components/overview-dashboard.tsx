@@ -3,15 +3,9 @@ import { Check, Copy } from "@phosphor-icons/react";
 import { useState, type ReactNode } from "react";
 import { Link } from "react-router";
 
+import { UsageHeatmapCard } from "@/components/usage-heatmap";
 import type { ActivityModelStatView, ActivityReportView, ActivitySeriesPointView } from "@/lib/api";
-import { cn } from "@/lib/utils";
-
-export function formatCompact(n: number): string {
-  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)}B`;
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return n.toLocaleString();
-}
+import { cn, formatCompact } from "@/lib/utils";
 
 function usd(value: number): string {
   if (value >= 100) return `$${value.toFixed(0)}`;
@@ -299,204 +293,6 @@ export function ModelsCard({ models }: { models: ActivityModelStatView[] }) {
   );
 }
 
-// The heatmap distributes across the full card width instead of using fixed-size cells, so
-// the grid always fills its container. MAX_CELL only matters for very short histories,
-// where an unclamped column would render enormous squares.
-const HEATMAP_GAP = 3;
-const HEATMAP_MAX_CELL = 32;
-
-/** GitHub-style contribution grid from daily activity buckets. */
-export function UsageHeatmapCard({
-  series,
-  weekTokens,
-  monthTokens,
-}: {
-  series: ActivitySeriesPointView[];
-  weekTokens: number;
-  monthTokens: number;
-}) {
-  const [hover, setHover] = useState<{ label: string; tokens: number } | null>(null);
-
-  const cells = series.map((pt) => ({
-    date: new Date(pt.timestamp),
-    label: pt.label,
-    tokens: pt.totalTokens,
-  }));
-  const max = Math.max(...cells.map((c) => c.tokens), 1);
-
-  const weeks: Array<Array<{ label: string; tokens: number; empty?: boolean } | null>> = [];
-  if (cells.length > 0) {
-    const first = cells[0].date;
-    const pad = first.getDay();
-    let week: Array<{ label: string; tokens: number; empty?: boolean } | null> = Array.from(
-      { length: pad },
-      () => ({ label: "", tokens: 0, empty: true }),
-    );
-    for (const cell of cells) {
-      week.push({ label: cell.label, tokens: cell.tokens });
-      if (week.length === 7) {
-        weeks.push(week);
-        week = [];
-      }
-    }
-    if (week.length > 0) {
-      while (week.length < 7) week.push(null);
-      weeks.push(week);
-    }
-  }
-
-  const monthLabels: Array<{ text: string; col: number }> = [];
-  let lastMonth = -1;
-  weeks.forEach((week, col) => {
-    const firstReal = week.find((c) => c && !c.empty);
-    if (!firstReal) return;
-    const match = cells.find((c) => c.label === firstReal.label);
-    if (!match) return;
-    const month = match.date.getMonth();
-    if (month !== lastMonth) {
-      monthLabels.push({
-        text: match.date.toLocaleDateString(undefined, { month: "short" }),
-        col,
-      });
-      lastMonth = month;
-    }
-  });
-
-  function level(tokens: number): string {
-    if (tokens <= 0) return "bg-kumo-fill";
-    const ratio = tokens / max;
-    if (ratio < 0.2) return "bg-kumo-brand/25";
-    if (ratio < 0.45) return "bg-kumo-brand/45";
-    if (ratio < 0.7) return "bg-kumo-brand/70";
-    return "bg-kumo-brand";
-  }
-
-  // Columns stretch to fill the card. The max-width caps growth on short histories, where
-  // an unclamped 1fr row would render enormous squares; a full 90-day window is wider than
-  // the cap, so it just fills the card as before.
-  const heatmapMaxWidth =
-    weeks.length * HEATMAP_MAX_CELL + Math.max(0, weeks.length - 1) * HEATMAP_GAP;
-  const heatmapColumns = `repeat(${weeks.length}, minmax(0, 1fr))`;
-
-  return (
-    <LayerCard className="overflow-hidden shadow-none">
-      <div className="flex flex-row items-start justify-between gap-3 px-4 pt-4 pb-2">
-        <div>
-          <Text variant="heading" as="h3">
-            Usage
-          </Text>
-          <Text variant="secondary" size="xs">
-            Daily token activity
-          </Text>
-        </div>
-        <div className="space-y-1 text-right text-xs text-kumo-subtle">
-          <p>
-            This week{" "}
-            <span className="font-medium text-kumo-default tabular-nums">
-              {formatCompact(weekTokens)}
-            </span>
-          </p>
-          <p>
-            This month{" "}
-            <span className="font-medium text-kumo-default tabular-nums">
-              {formatCompact(monthTokens)}
-            </span>
-          </p>
-        </div>
-      </div>
-      <div className="px-4 pb-4">
-        {weeks.length === 0 ? (
-          <p className="py-6 text-center text-xs text-kumo-subtle">No usage yet.</p>
-        ) : (
-          <>
-            {/* Fluid columns: each grid spans the card width, so the cells scale instead of
-                leaving empty space and clipping the month labels. The max-width only bites
-                when the history is short, so a two-week window cannot render giant squares. */}
-            <div style={{ maxWidth: heatmapMaxWidth }}>
-              <div
-                className="mb-1.5 grid text-xs text-kumo-subtle"
-                style={{
-                  gridTemplateColumns: heatmapColumns,
-                  columnGap: HEATMAP_GAP,
-                }}
-              >
-                {weeks.map((_, col) => {
-                  const label = monthLabels.find((m) => m.col === col);
-                  return (
-                    <span key={col} className="overflow-visible whitespace-nowrap leading-none">
-                      {label?.text ?? ""}
-                    </span>
-                  );
-                })}
-              </div>
-              <div
-                className="grid w-full"
-                style={{
-                  gridTemplateRows: "repeat(7, auto)",
-                  gridAutoFlow: "column",
-                  gridTemplateColumns: heatmapColumns,
-                  gap: HEATMAP_GAP,
-                }}
-                onMouseLeave={() => setHover(null)}
-              >
-                {weeks.flatMap((week, col) =>
-                  week.map((cell, row) => {
-                    if (!cell || cell.empty) {
-                      return (
-                        <span
-                          key={`${col}-${row}`}
-                          className="aspect-square w-full rounded-[3px] bg-transparent"
-                        />
-                      );
-                    }
-                    return (
-                      <button
-                        key={`${col}-${row}`}
-                        type="button"
-                        title={`${cell.label}: ${formatCompact(cell.tokens)} tokens`}
-                        className={cn(
-                          "aspect-square w-full rounded-[3px] outline-none transition-[transform,opacity] duration-150 ease-out",
-                          "hover:scale-110 hover:opacity-100 focus-visible:ring-2 focus-visible:ring-kumo-line",
-                          level(cell.tokens),
-                        )}
-                        onMouseEnter={() => setHover({ label: cell.label, tokens: cell.tokens })}
-                      />
-                    );
-                  }),
-                )}
-              </div>
-            </div>
-            <div className="mt-3 flex items-center justify-between gap-3 text-xs text-kumo-subtle">
-              <p className="min-h-[1rem] tabular-nums">
-                {hover ? (
-                  <>
-                    {hover.label}:{" "}
-                    <span className="font-medium text-kumo-default">
-                      {formatCompact(hover.tokens)} tokens
-                    </span>
-                  </>
-                ) : (
-                  <span className="opacity-70">Hover a day for detail</span>
-                )}
-              </p>
-              <div className="flex items-center gap-1">
-                <span>Less</span>
-                {[0, 0.15, 0.35, 0.55, 0.85].map((r, i) => (
-                  <span
-                    key={i}
-                    className={cn("size-2.5 rounded-[2px]", level(r === 0 ? 0 : r * max))}
-                  />
-                ))}
-                <span>More</span>
-              </div>
-            </div>
-          </>
-        )}
-      </div>
-    </LayerCard>
-  );
-}
-
 export function SpendCard({
   summary,
   series,
@@ -656,16 +452,20 @@ export function OverviewDashboardGrid({
       : month.series.length > 0
         ? month.series
         : week.series;
+  // One ranked model list feeds both the Models card and the heatmap footer, so the two
+  // never disagree about which models lead.
+  const topModels = week.models.length > 0 ? week.models : month.models;
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 lg:gap-4">
       <div className="flex flex-col gap-4 lg:col-span-7">
         <TodayTokensCard today={today} week={week} month={month} />
-        <ModelsCard models={week.models.length > 0 ? week.models : month.models} />
+        <ModelsCard models={topModels} />
       </div>
       <div className="flex flex-col gap-4 lg:col-span-5">
         <UsageHeatmapCard
           series={heatmapSeries}
+          models={topModels}
           weekTokens={week.summary.totalTokens}
           monthTokens={month.summary.totalTokens}
         />

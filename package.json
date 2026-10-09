@@ -49,6 +49,7 @@
     "@cloudflare/kumo": "^2.14.0",
     "@phosphor-icons/react": "^2.1.10",
     "echarts": "^6.1.0",
+    "motion": "^14.0.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
