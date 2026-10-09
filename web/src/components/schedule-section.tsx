@@ -1,3 +1,4 @@
+import { Badge, Banner, Button, Input, LayerCard, LayerDialog, Text } from "@cloudflare/kumo";
 import {
   closestCenter,
   DndContext,
@@ -15,7 +16,6 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { ArrowDown, ArrowUp, DotsSixVertical, Plus, Warning, X } from "@phosphor-icons/react";
-import { Badge, Banner, Button, Input, LayerCard, LayerDialog, Text } from "@cloudflare/kumo";
 import { useMemo, useState, type ReactNode } from "react";
 
 import type {
@@ -292,12 +292,13 @@ export function ScheduleSection({
                 shadows.length === 1
                   ? `${windowName(shadows[0].by)} covers the whole ${windowName(shadows[0].window)} range and comes first, so it is never active.`
                   : shadows
-                      .map((entry) => `${windowName(entry.window)} (covered by ${windowName(entry.by)})`)
+                      .map(
+                        (entry) =>
+                          `${windowName(entry.window)} (covered by ${windowName(entry.by)})`,
+                      )
                       .join(", ")
               }
-              action={
-                <Banner.Action onClick={openEditor}>Reorder</Banner.Action>
-              }
+              action={<Banner.Action onClick={openEditor}>Reorder</Banner.Action>}
             />
           </LayerCard.Primary>
         ) : overlaps.length > 0 ? (

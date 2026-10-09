@@ -96,10 +96,9 @@ test("scheduleErrors reports each problem at its own field", () => {
   // The summary prefers the time zone error, and otherwise names the first bad window.
   assert.equal(firstScheduleError(errors, []), errors.timezone);
   assert.equal(
-    firstScheduleError(
-      { windows: errors.windows },
-      [{ id: "a", label: "", start: "09:00", end: "17:00" }],
-    ),
+    firstScheduleError({ windows: errors.windows }, [
+      { id: "a", label: "", start: "09:00", end: "17:00" },
+    ]),
     "An unnamed window: Name this window.",
   );
 });
@@ -114,9 +113,7 @@ test("scheduleErrors is clean for a valid schedule and limits the window count",
 
   const many = scheduleErrors({
     timezone: "",
-    windows: Array.from({ length: 13 }, (_, index) =>
-      window(`w${index}`, "09:00", "17:00"),
-    ),
+    windows: Array.from({ length: 13 }, (_, index) => window(`w${index}`, "09:00", "17:00")),
   });
   assert.match(many.schedule ?? "", /at most 12 windows/);
   // The window-count problem is not a time zone problem.

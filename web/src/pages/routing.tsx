@@ -421,9 +421,7 @@ export function RoutingPage({
       });
       const previous = savedRef.current;
       savedRef.current = result.routing.routings;
-      setDrafts((current) =>
-        mergeRoutingDrafts(result.routing.routings, current, previous),
-      );
+      setDrafts((current) => mergeRoutingDrafts(result.routing.routings, current, previous));
       setState((current) =>
         current
           ? {
@@ -1176,8 +1174,7 @@ export function RoutingPage({
                                 }
                                 value={null}
                                 onValueChange={(option: any) => {
-                                  const value =
-                                    typeof option === "string" ? option : option?.value;
+                                  const value = typeof option === "string" ? option : option?.value;
                                   if (value && !list.includes(value))
                                     setWindowModels(slot.id, [...list, value]);
                                 }}

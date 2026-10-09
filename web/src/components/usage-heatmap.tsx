@@ -1,10 +1,5 @@
 import { LayerCard, Text } from "@cloudflare/kumo";
-import {
-  AnimatePresence,
-  motion,
-  useReducedMotion,
-  type Transition,
-} from "motion/react";
+import { AnimatePresence, motion, useReducedMotion, type Transition } from "motion/react";
 import {
   useEffect,
   useId,
@@ -432,9 +427,7 @@ const ModelRow = ({
     <span className="flex-1 truncate text-sm text-kumo-default" title={row.name}>
       {row.name}
     </span>
-    <span className="text-sm tabular-nums text-kumo-subtle">
-      {row.requests.toLocaleString()}
-    </span>
+    <span className="text-sm tabular-nums text-kumo-subtle">{row.requests.toLocaleString()}</span>
   </div>
 );
 
@@ -646,11 +639,7 @@ export function UsageHeatmapCard({
               >
                 {rows.map((row, index) => (
                   <li key={row.id}>
-                    <ModelRow
-                      row={row}
-                      layoutId={`${uid}-${index}`}
-                      transition={transition}
-                    />
+                    <ModelRow row={row} layoutId={`${uid}-${index}`} transition={transition} />
                   </li>
                 ))}
               </motion.ul>

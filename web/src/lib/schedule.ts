@@ -15,7 +15,9 @@ export const MAX_SCHEDULE_WINDOWS = 12;
  * Providers on other plans (an API key, or a token plan with an off-peak discount) keep the card.
  */
 export function offersTimeBasedModels(providers: Pick<ProviderView, "oauthSource">[]): boolean {
-  return providers.length === 0 || providers.some((provider) => provider.oauthSource !== "claude-code");
+  return (
+    providers.length === 0 || providers.some((provider) => provider.oauthSource !== "claude-code")
+  );
 }
 
 const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -202,7 +204,8 @@ function within(
   const innerTo = clockMinutes(inner.end);
   const outerFrom = clockMinutes(outer.start);
   const outerTo = clockMinutes(outer.end);
-  if (innerFrom === null || innerTo === null || outerFrom === null || outerTo === null) return false;
+  if (innerFrom === null || innerTo === null || outerFrom === null || outerTo === null)
+    return false;
   const inOuter = (minute: number): boolean => {
     if (outerFrom < outerTo) return minute >= outerFrom && minute < outerTo;
     return minute >= outerFrom || minute < outerTo;
@@ -217,7 +220,9 @@ function within(
 }
 
 /** Windows that overlap an earlier window but are not fully hidden by it. */
-export function partialOverlaps(windows: ScheduleWindowView[]): [ScheduleWindowView, ScheduleWindowView][] {
+export function partialOverlaps(
+  windows: ScheduleWindowView[],
+): [ScheduleWindowView, ScheduleWindowView][] {
   const hidden = new Set(shadowedWindows(windows).map((entry) => entry.window.id));
   const pairs: [ScheduleWindowView, ScheduleWindowView][] = [];
   for (let i = 0; i < windows.length; i += 1) {

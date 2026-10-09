@@ -2,6 +2,29 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.7.2] - 2026-10-09
+
+### Added
+
+- **Time-window schedules.** A task can run different models at different times of day, for example cheaper models during an off-peak discount. The config holds a time zone and named daily windows; a task lists its own models for a window. The first window that contains the current time wins, and a window whose end is before its start runs past midnight. Time zone data is embedded, so a Windows host needs no system copy.
+- **Schedule card on Models & Routing.** The card shows which window is active, when it changes next, and which models each task runs under each window. **Edit schedule** sets the time zone and the windows; **Customize** on a task has **Models by time** with a model list per window. The card refreshes every minute, and it warns when windows overlap or when an earlier window hides a later one completely. Windows can be reordered by drag or with the up and down buttons.
+- **Quick-start guides for Claude Code, OpenCode and PI Agent**, with a provider example for each, and how to run one Jevonian instance per client.
+
+### Changed
+
+- **Right sizing for the routing brain.** `thinking_budget` is clamped when `max_completion_tokens` is constrained, so an over-large budget no longer fails the request.
+
+### Fixed
+
+- **Windows could not start.** The SQLite URL for the ledger was invalid for `C:\...` paths. This stopped 0.6.x from starting on Windows.
+- **Claude login returned HTTP 400.** `context_management` made every Sonnet and Opus request fail through the `claude-subscription` provider. The field is now dropped on that wire.
+- **Dashboard file types.** Content types no longer come from the Windows registry.
+- **Provider order survived a window-only model.** A model that only a window listed lost its per-provider order, because the order was pruned against the base list first.
+- **The schedule reported the wrong next change.** It named the next boundary of any window, even one that the first-match rule hides behind an earlier window.
+- **Automatic tasks showed the wrong models while a window was active.** The Routing page now uses the models in effect, so the shown chain matches what a request actually runs.
+- **`JEVONIAN_PORT` was ignored before the first config file existed.**
+- **The empty Schedule card is hidden when every provider signs in with the Claude Code login**, because a plan costs the same at every hour there.
+
 ## [0.7.1] - 2026-10-09
 
 ### Fixed
