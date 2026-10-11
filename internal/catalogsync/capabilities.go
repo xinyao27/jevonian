@@ -216,6 +216,17 @@ func ModelCapabilities(model string) routing.ModelCapabilities {
 	if c := cursorCapabilities(model); c.ContextWindow > 0 {
 		out.ContextWindow = c.ContextWindow
 	}
+	if c := xaiCapabilities(model); c.ContextWindow > 0 {
+		if out.ContextWindow == 0 {
+			out.ContextWindow = c.ContextWindow
+		}
+		if out.MaxOutput == 0 {
+			out.MaxOutput = c.MaxOutput
+		}
+		if len(out.Efforts) == 0 {
+			out.Efforts = c.Efforts
+		}
+	}
 	if catalog.ContextWindow > 0 {
 		out.ContextWindow = catalog.ContextWindow
 	}
@@ -226,6 +237,63 @@ func ModelCapabilities(model string) routing.ModelCapabilities {
 		out.Efforts = append([]string(nil), catalog.Efforts...)
 	}
 	return out
+}
+
+// xaiCapabilities falls back to the window, max output, and accepted reasoning
+// efforts from official xAI specifications (https://docs.x.ai/developers/pricing).
+func xaiCapabilities(model string) routing.ModelCapabilities {
+	id := strings.ToLower(routing.BareModelID(model))
+	switch id {
+	case "grok-4.5", "grok-4.5-latest", "grok-build-latest":
+		return routing.ModelCapabilities{
+			ContextWindow: 500000,
+			MaxOutput:     65536,
+			Efforts:       []string{"low", "medium", "high", "xhigh"},
+		}
+	case "grok-4.7":
+		return routing.ModelCapabilities{
+			ContextWindow: 500000,
+			MaxOutput:     65536,
+			Efforts:       []string{"low", "medium", "high", "xhigh"},
+		}
+	case "grok-4.6":
+		return routing.ModelCapabilities{
+			ContextWindow: 500000,
+			MaxOutput:     65536,
+			Efforts:       []string{"low", "medium", "high", "xhigh"},
+		}
+	case "grok-4.3", "grok-4.3-latest":
+		return routing.ModelCapabilities{
+			ContextWindow: 1000000,
+			MaxOutput:     65536,
+			Efforts:       []string{"none", "low", "medium", "high", "xhigh"},
+		}
+	case "grok-build-0.1", "grok-code-fast-1", "grok-code-fast":
+		return routing.ModelCapabilities{
+			ContextWindow: 256000,
+			MaxOutput:     65536,
+			Efforts:       []string{"low", "medium", "high"},
+		}
+	case "grok-4.20-0309-reasoning", "grok-4.20":
+		return routing.ModelCapabilities{
+			ContextWindow: 1000000,
+			MaxOutput:     65536,
+			Efforts:       []string{"low", "medium", "high"},
+		}
+	case "grok-4.20-0309-non-reasoning", "grok-4.20-non-reasoning":
+		return routing.ModelCapabilities{
+			ContextWindow: 1000000,
+			MaxOutput:     65536,
+			Efforts:       []string{"none"},
+		}
+	case "grok-4.20-multi-agent-0309", "grok-4.20-multi-agent":
+		return routing.ModelCapabilities{
+			ContextWindow: 1000000,
+			MaxOutput:     65536,
+			Efforts:       []string{"low", "medium", "high"},
+		}
+	}
+	return routing.ModelCapabilities{}
 }
 
 // devinCapabilities falls back to the window and output cap Devin's own

@@ -18,6 +18,7 @@ var providerTypes = map[string]bool{
 var oauthSources = map[string]bool{
 	"claude-code": true, "codex": true, "antigravity": true, "devin": true,
 	"cursor": true, "workbuddy-ai": true, "freebuff": true, "static": true,
+	"grok": true,
 }
 
 var reasoningEfforts = map[string]bool{

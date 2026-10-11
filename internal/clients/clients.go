@@ -25,6 +25,7 @@ type ClientID string
 const (
 	ChatGPT ClientID = "chatgpt"
 	Claude  ClientID = "claude"
+	Grok    ClientID = "grok"
 )
 
 type Status string
@@ -70,11 +71,11 @@ type ApplyResult struct {
 // Options permits tests to avoid all real user paths and process operations.
 // Explicit Home also disables ambient client/data path overrides unless supplied.
 type Options struct {
-	Home, DataDir, CodexHome, ClaudeConfigDir, Platform, Hostname string
-	LookPath                                                      func(string) (string, error)
-	Running                                                       func(ClientID) bool
-	Restart                                                       func(context.Context, ClientID) error
-	Now                                                           func() time.Time
+	Home, DataDir, CodexHome, ClaudeConfigDir, GrokHome, Platform, Hostname string
+	LookPath                                                                func(string) (string, error)
+	Running                                                                 func(ClientID) bool
+	Restart                                                                 func(context.Context, ClientID) error
+	Now                                                                     func() time.Time
 }
 type Manager struct {
 	opts Options
@@ -109,6 +110,14 @@ func New(opts Options) *Manager {
 			opts.ClaudeConfigDir = filepath.Join(opts.Home, ".claude")
 		}
 	}
+	if opts.GrokHome == "" {
+		if !explicitHome {
+			opts.GrokHome = os.Getenv("GROK_HOME")
+		}
+		if opts.GrokHome == "" {
+			opts.GrokHome = filepath.Join(opts.Home, ".grok")
+		}
+	}
 	if opts.Platform == "" {
 		opts.Platform = runtime.GOOS
 		if opts.Platform == "windows" {
@@ -126,13 +135,15 @@ func New(opts Options) *Manager {
 	}
 	return &Manager{opts: opts}
 }
-func validID(id ClientID) bool             { return id == ChatGPT || id == Claude }
+func validID(id ClientID) bool             { return id == ChatGPT || id == Claude || id == Grok }
 func (m *Manager) StateDir() string        { return filepath.Join(m.opts.DataDir, "clients") }
 func (m *Manager) CodexConfigPath() string { return filepath.Join(m.opts.CodexHome, "config.toml") }
+func (m *Manager) GrokConfigPath() string  { return filepath.Join(m.opts.GrokHome, "config.toml") }
 func (m *Manager) ClaudeCodeSettingsPath() string {
 	return filepath.Join(m.opts.ClaudeConfigDir, "settings.json")
 }
 func CodexBaseURL(port int) string      { return fmt.Sprintf("http://127.0.0.1:%d/v1", port) }
+func GrokBaseURL(port int) string       { return fmt.Sprintf("http://127.0.0.1:%d/v1", port) }
 func ClaudeCodeBaseURL(port int) string { return sentinel.BaseURL(port) }
 func ClaudeCodeEnv(port int, models []string, model string) map[string]string {
 	return sentinel.Env(port, models, model)
@@ -151,7 +162,7 @@ func (m *Manager) Targets(port int) []Target {
 	return m.targets(port)
 }
 func (m *Manager) targets(port int) []Target {
-	return []Target{m.chatGPTStatus(port), m.claudeStatus(port)}
+	return []Target{m.chatGPTStatus(port), m.claudeStatus(port), m.grokStatus(port)}
 }
 func (m *Manager) Apply(id ClientID, opts ApplyOptions) (ApplyResult, error) {
 	m.mu.Lock()
@@ -160,10 +171,13 @@ func (m *Manager) Apply(id ClientID, opts ApplyOptions) (ApplyResult, error) {
 		return ApplyResult{}, fmt.Errorf("Unknown client.")
 	}
 	if len(opts.Models) == 0 {
-		return ApplyResult{}, fmt.Errorf("Select at least one model before connecting %s.", map[ClientID]string{ChatGPT: "ChatGPT", Claude: "Claude"}[id])
+		return ApplyResult{}, fmt.Errorf("Select at least one model before connecting %s.", map[ClientID]string{ChatGPT: "ChatGPT", Claude: "Claude", Grok: "Grok"}[id])
 	}
 	if id == ChatGPT {
 		return m.applyChatGPT(opts)
+	}
+	if id == Grok {
+		return m.applyGrok(opts)
 	}
 	return m.applyClaude(opts)
 }
@@ -176,11 +190,17 @@ func (m *Manager) Restore(id ClientID) (Target, error) {
 	if id == ChatGPT {
 		return m.restoreChatGPT()
 	}
+	if id == Grok {
+		return m.restoreGrok()
+	}
 	return m.restoreClaude()
 }
 func (m *Manager) ClientConfigExists(id ClientID) bool {
 	if id == ChatGPT {
 		return exists(m.CodexConfigPath())
+	}
+	if id == Grok {
+		return exists(m.GrokConfigPath())
 	}
 	return m.desktopInstalled() || exists(m.ClaudeCodeSettingsPath())
 }

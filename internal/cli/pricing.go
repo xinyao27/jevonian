@@ -58,7 +58,22 @@ var fallbackPrices = map[string]modelPrice{
 	"glm-5.3-flash":       {Provider: "zai", Input: .15, Output: .5, CacheRead: .03},
 	"minimax-m3":          {Provider: "minimax", Input: .3, Output: 1.2, CacheRead: .06},
 	"qwen3.8-flash":       {Provider: "qwen", Input: .15, Output: .47, CacheRead: .016, CacheWrite: .2},
-	"grok-4.6":            {Provider: "xai", Input: 2, Output: 6, CacheRead: .5},
+	"grok-4.5":            {Provider: "xai", Input: 2.0, Output: 6.0, CacheRead: .3},
+	"grok-4.5-latest":     {Provider: "xai", Input: 2.0, Output: 6.0, CacheRead: .3},
+	"grok-build-latest":   {Provider: "xai", Input: 2.0, Output: 6.0, CacheRead: .3},
+	"grok-4.7":            {Provider: "xai", Input: 2.0, Output: 6.0},
+	"grok-4.6":            {Provider: "xai", Input: 2.0, Output: 6.0, CacheRead: .5},
+	"grok-4.3":            {Provider: "xai", Input: 1.25, Output: 2.5, CacheRead: .2},
+	"grok-4.3-latest":     {Provider: "xai", Input: 1.25, Output: 2.5, CacheRead: .2},
+	"grok-build-0.1":      {Provider: "xai", Input: 1.0, Output: 2.0, CacheRead: .2},
+	"grok-code-fast-1":    {Provider: "xai", Input: 1.0, Output: 2.0, CacheRead: .2},
+	"grok-code-fast":      {Provider: "xai", Input: 1.0, Output: 2.0, CacheRead: .2},
+	"grok-4.20":           {Provider: "xai", Input: 1.25, Output: 2.5},
+	"grok-4.20-0309-reasoning":     {Provider: "xai", Input: 1.25, Output: 2.5},
+	"grok-4.20-non-reasoning":     {Provider: "xai", Input: 1.25, Output: 2.5},
+	"grok-4.20-0309-non-reasoning": {Provider: "xai", Input: 1.25, Output: 2.5},
+	"grok-4.20-multi-agent":       {Provider: "xai", Input: 1.25, Output: 2.5},
+	"grok-4.20-multi-agent-0309":  {Provider: "xai", Input: 1.25, Output: 2.5},
 }
 
 func pricingPath() string { return filepath.Join(paths.DataDir(), "pricing.json") }

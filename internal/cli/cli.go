@@ -41,7 +41,7 @@ Usage: jevonian [command] [flags]
   quota [--refresh]           Show quota windows, reset times, and rolling spend
   refresh                     Refresh catalog, pricing, and leaderboard snapshots
   update [--check]            Check for or install a new release
-  launch claude [--model M] [--] [args...]  Launch Claude Code without disk edits
+  launch <claude|grok> [--model M] [--] [args...]  Launch Claude Code or Grok CLI without disk edits
   version | help              Print version or this help
 
 Serve flags: --foreground / --fg, --no-open, --lan / --no-lan,

@@ -904,3 +904,63 @@ func numberField(value any) int64 {
 	}
 	return 0
 }
+
+// ---------------------------------------------------------------------------
+// Grok CLI
+// ---------------------------------------------------------------------------
+
+// GrokAuthPath is where Grok CLI keeps auth.json: JEVONIAN_GROK_AUTH wins, then
+// login.credentialsPath, then $GROK_HOME / login.home / ~/.grok -> auth.json.
+func GrokAuthPath(login *Login) string { return grokAuthPath(login) }
+
+func grokAuthPath(login *Login) string {
+	if v := os.Getenv("JEVONIAN_GROK_AUTH"); v != "" {
+		return v
+	}
+	if login != nil && login.CredentialsPath != "" {
+		return login.CredentialsPath
+	}
+	base := os.Getenv("GROK_HOME")
+	if base == "" && login != nil {
+		base = login.Home
+	}
+	if base == "" {
+		home, _ := os.UserHomeDir()
+		base = filepath.Join(home, ".grok")
+	}
+	return filepath.Join(base, "auth.json")
+}
+
+func (r *Resolver) resolveGrok(_ context.Context, login *Login) (Token, error) {
+	path := grokAuthPath(login)
+	data, ok := readJSONFile(path)
+	if !ok {
+		return Token{}, errors.New("Grok CLI credentials not found. Run `grok` to sign in first, or set JEVONIAN_GROK_AUTH.")
+	}
+	// ~/.grok/auth.json contains entries keyed by issuer/client URI or flat keys.
+	for _, val := range data {
+		rec := asRecord(val)
+		if rec == nil {
+			continue
+		}
+		tok := stringField(rec["key"])
+		if tok == "" {
+			tok = stringField(rec["access_token"])
+		}
+		if tok != "" {
+			teamID := stringField(rec["team_id"])
+			expiresAt := jwtExpiryMS(tok)
+			if expStr := stringField(rec["expires_at"]); expStr != "" && expiresAt == 0 {
+				if t, err := time.Parse(time.RFC3339Nano, expStr); err == nil {
+					expiresAt = t.UnixMilli()
+				}
+			}
+			return Token{Token: tok, AccountID: teamID, ExpiresAt: expiresAt}, nil
+		}
+	}
+	if tok := stringField(data["key"]); tok != "" {
+		return Token{Token: tok, ExpiresAt: jwtExpiryMS(tok)}, nil
+	}
+	return Token{}, errors.New("Grok credentials file had no usable token. Run `grok` to sign in again.")
+}
+

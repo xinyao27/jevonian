@@ -12,3 +12,4 @@ web/dist/*
 
 # Go build output (the npm shim lives in bin/)
 /jevonian
+*.exe

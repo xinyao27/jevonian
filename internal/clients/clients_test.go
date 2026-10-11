@@ -344,3 +344,36 @@ func TestCodexCatalogTSContract(t *testing.T) {
 		t.Fatal("not plain JSON")
 	}
 }
+
+func TestGrokApplyAndRestore(t *testing.T) {
+	m := testManager(t, "linux")
+	grokCfg := m.GrokConfigPath()
+	put(t, grokCfg, "[models]\ndefault = \"grok-4.7\"\ndefault_reasoning_effort = \"high\"\n")
+
+	status := m.GrokStatus(8787)
+	if !status.Installed {
+		t.Fatal("expected Grok installed when config exists")
+	}
+	if status.Status == Connected {
+		t.Fatal("expected Disconnected initially")
+	}
+
+	mustApply(t, m, Grok, ApplyOptions{Port: 8787, Models: []string{"grok-4.5"}})
+
+	content := get(t, grokCfg)
+	assertContains(t, content, `xai_api_base_url = "http://127.0.0.1:8787/v1"`, `models_base_url = "http://127.0.0.1:8787/v1"`, `default = "grok-4.5"`, `default_reasoning_effort = "high"`)
+
+	statusAfter := m.GrokStatus(8787)
+	if statusAfter.Status != Connected {
+		t.Fatalf("expected Connected after apply, got %s", statusAfter.Status)
+	}
+
+	mustRestore(t, m, Grok)
+
+	restored := get(t, grokCfg)
+	if strings.Contains(restored, "8787") {
+		t.Fatalf("expected 8787 removed after restore, got:\n%s", restored)
+	}
+	assertContains(t, restored, `default = "grok-4.7"`)
+}
+

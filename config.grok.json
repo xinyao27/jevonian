@@ -1,0 +1,98 @@
+{
+  "listen": {
+    "host": "127.0.0.1",
+    "port": 8787
+  },
+  "defaultProvider": "xai",
+  "providers": [
+    {
+      "name": "xai",
+      "type": "openai",
+      "baseUrl": "https://api.x.ai/v1",
+      "apiKeyEnv": "XAI_API_KEY",
+      "auth": "api-key",
+      "billing": "api",
+      "models": [
+        "grok-4.7",
+        "grok-4.5",
+        "grok-4.6",
+        "grok-build-0.1",
+        "grok-4.3",
+        "grok-4.20"
+      ]
+    }
+  ],
+  "routing": {
+    "mode": "auto",
+    "baselineModel": "grok-4.5",
+    "defaultEffort": "medium",
+    "brainPicksEffort": true,
+    "routings": [
+      {
+        "id": "plan",
+        "label": "Plan",
+        "description": "Architectural decisions, task decomposition, and code reviews",
+        "effort": "high",
+        "models": ["grok-4.7", "grok-4.5"]
+      },
+      {
+        "id": "execute",
+        "label": "Execute",
+        "description": "Implementation loops, editing, test runs, and bug fixes",
+        "effort": "medium",
+        "models": ["grok-4.5", "grok-build-0.1"]
+      },
+      {
+        "id": "utility",
+        "label": "Utility",
+        "description": "Summaries, commit messages, titles, and background tasks",
+        "effort": "low",
+        "models": ["grok-build-0.1", "grok-4.3"]
+      },
+      {
+        "id": "chat",
+        "label": "Chat",
+        "description": "Casual conversation and fast answers without deep reasoning",
+        "effort": "none",
+        "models": ["grok-4.3", "grok-4.20-non-reasoning"]
+      }
+    ],
+    "capacities": {
+      "grok-4.5": {
+        "contextWindow": 500000,
+        "maxOutput": 65536,
+        "efforts": ["low", "medium", "high", "xhigh"]
+      },
+      "grok-4.7": {
+        "contextWindow": 500000,
+        "maxOutput": 65536,
+        "efforts": ["low", "medium", "high", "xhigh"]
+      },
+      "grok-4.6": {
+        "contextWindow": 500000,
+        "maxOutput": 65536,
+        "efforts": ["low", "medium", "high", "xhigh"]
+      },
+      "grok-4.3": {
+        "contextWindow": 1000000,
+        "maxOutput": 65536,
+        "efforts": ["none", "low", "medium", "high", "xhigh"]
+      },
+      "grok-build-0.1": {
+        "contextWindow": 256000,
+        "maxOutput": 65536,
+        "efforts": ["low", "medium", "high"]
+      },
+      "grok-4.20": {
+        "contextWindow": 1000000,
+        "maxOutput": 65536,
+        "efforts": ["low", "medium", "high"]
+      },
+      "grok-4.20-non-reasoning": {
+        "contextWindow": 1000000,
+        "maxOutput": 65536,
+        "efforts": ["none"]
+      }
+    }
+  }
+}

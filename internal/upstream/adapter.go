@@ -622,14 +622,14 @@ func withEffort(body wire.Body, effort string) wire.Body {
 	if effort == "" {
 		return body
 	}
-	if _, ok := body["reasoning_effort"]; ok {
-		return body
-	}
 	out := make(wire.Body, len(body)+1)
 	for k, v := range body {
 		out[k] = v
 	}
-	out["reasoning_effort"] = effort
+	delete(out, "thinking_budget")
+	if _, ok := out["reasoning_effort"]; !ok {
+		out["reasoning_effort"] = effort
+	}
 	return out
 }
 
@@ -637,7 +637,13 @@ func withEffort(body wire.Body, effort string) wire.Body {
 // or max_tokens. On DashScope/Qwen, reasoning models default thinking_budget to 32768,
 // which errors with HTTP 400 "max_completion_tokens [X] must be greater than thinking_budget [32768]"
 // whenever a client restricts max_completion_tokens <= 32768.
+// When reasoning_effort is present, DashScope forbids thinking_budget simultaneously.
 func fitThinkingBudget(body wire.Body) wire.Body {
+	if _, ok := body["reasoning_effort"]; ok {
+		delete(body, "thinking_budget")
+		return body
+	}
+
 	var maxTokens int
 	if v, ok := body["max_completion_tokens"]; ok {
 		maxTokens = bodyToInt(v)

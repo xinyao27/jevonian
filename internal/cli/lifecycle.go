@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xinyao27/jevonian/internal/clients"
 	"github.com/xinyao27/jevonian/internal/config"
 	"github.com/xinyao27/jevonian/internal/oauth/sentinel"
 	"github.com/xinyao27/jevonian/internal/paths"
@@ -230,10 +231,22 @@ func (c commandContext) status() error {
 }
 func (c commandContext) launch(args []string) int {
 	fail := func(err error) int { fmt.Fprintln(c.errOut, err); return 1 }
-	if len(args) == 0 || (args[0] != "claude" && args[0] != "claude-code") {
-		return fail(fmt.Errorf("Usage: jevonian launch claude [--model M] [--] [claude args...]"))
+	if len(args) == 0 {
+		return fail(fmt.Errorf("Usage: jevonian launch <claude|grok> [--model M] [--] [args...]"))
 	}
-	a, err := parseArgs(args[1:])
+	targetClient := strings.ToLower(args[0])
+	if targetClient == "claude" || targetClient == "claude-code" {
+		return c.launchClaude(args[1:])
+	}
+	if targetClient == "grok" || targetClient == "grok-cli" {
+		return c.launchGrok(args[1:])
+	}
+	return fail(fmt.Errorf("Usage: jevonian launch <claude|grok> [--model M] [--] [args...]"))
+}
+
+func (c commandContext) launchClaude(args []string) int {
+	fail := func(err error) int { fmt.Fprintln(c.errOut, err); return 1 }
+	a, err := parseArgs(args)
 	if err != nil {
 		return fail(err)
 	}
@@ -255,6 +268,63 @@ func (c commandContext) launch(args []string) int {
 	}
 	cmd := exec.Command(spec.Path, spec.Args...)
 	cmd.Env = spec.Env
+	cmd.Stdin = c.in
+	cmd.Stdout = rawWriter(c.out)
+	cmd.Stderr = rawWriter(c.errOut)
+	if err := cmd.Run(); err != nil {
+		if exit, ok := err.(*exec.ExitError); ok {
+			code := exit.ExitCode()
+			if code < 0 {
+				return 1
+			}
+			return code
+		}
+		return fail(err)
+	}
+	return 0
+}
+
+func (c commandContext) launchGrok(args []string) int {
+	fail := func(err error) int { fmt.Fprintln(c.errOut, err); return 1 }
+	a, err := parseArgs(args)
+	if err != nil {
+		return fail(err)
+	}
+	if _, err := os.Stat(paths.ConfigPath()); err != nil {
+		return fail(fmt.Errorf("No config at %s. Run `jevonian init` or `jevonian serve` first", paths.ConfigPath()))
+	}
+	cfg, _, err := config.Load()
+	if err != nil {
+		return fail(err)
+	}
+	mgr := clients.New(clients.Options{})
+	grokBin := mgr.FindGrokPath()
+	if grokBin == "" {
+		return fail(fmt.Errorf("grok binary not found. Install Grok CLI, then re-run `jevonian launch grok`."))
+	}
+
+	baseURL := fmt.Sprintf("http://127.0.0.1:%d/v1", cfg.Listen.Port)
+	model := a.flags["model"]
+	if model == "" {
+		if cfg.Routing.BaselineModel != "" {
+			model = cfg.Routing.BaselineModel
+		} else {
+			model = "jevonian/auto"
+		}
+	}
+
+	argv := []string{"-u", baseURL, "-m", model}
+	argv = append(argv, a.positionals...)
+	argv = append(argv, a.passthrough...)
+
+	env := os.Environ()
+	env = append(env,
+		fmt.Sprintf("GROK_MODELS_BASE_URL=%s", baseURL),
+		fmt.Sprintf("GROK_XAI_API_BASE_URL=%s", baseURL),
+	)
+
+	cmd := exec.Command(grokBin, argv...)
+	cmd.Env = env
 	cmd.Stdin = c.in
 	cmd.Stdout = rawWriter(c.out)
 	cmd.Stderr = rawWriter(c.errOut)

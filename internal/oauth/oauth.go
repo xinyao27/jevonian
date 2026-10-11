@@ -36,6 +36,7 @@ var Sources = []Source{
 	"workbuddy-ai",
 	"freebuff",
 	"static",
+	"grok",
 }
 
 // IsSource reports whether value names a known source.
@@ -276,6 +277,8 @@ func (r *Resolver) resolveSource(ctx context.Context, opts ResolveOptions) (Toke
 		return r.resolveWorkbuddy(ctx, login, opts.Endpoint)
 	case "freebuff":
 		return r.resolveFreebuff(login)
+	case "grok":
+		return r.resolveGrok(ctx, login)
 	default:
 		return Token{}, fmt.Errorf("unknown OAuth source %q", opts.Source)
 	}

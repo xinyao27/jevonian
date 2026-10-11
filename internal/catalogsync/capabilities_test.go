@@ -238,3 +238,33 @@ func TestIdentityPrefersOfficialNameAndReloadsOnChange(t *testing.T) {
 		t.Fatalf("after refresh = %+v", got)
 	}
 }
+
+func TestXaiGrokCapabilities(t *testing.T) {
+	sandbox(t)
+	caps := Capabilities()
+
+	// grok-4.5 context window and reasoning efforts
+	g45 := caps("grok-4.5")
+	if g45.ContextWindow != 500000 {
+		t.Fatalf("expected grok-4.5 context window 500000, got %d", g45.ContextWindow)
+	}
+	if len(g45.Efforts) != 4 || g45.Efforts[0] != "low" || g45.Efforts[3] != "xhigh" {
+		t.Fatalf("expected grok-4.5 efforts [low, medium, high, xhigh], got %v", g45.Efforts)
+	}
+
+	// grok-4.3 1M context window and efforts including none
+	g43 := caps("xai/grok-4.3")
+	if g43.ContextWindow != 1000000 {
+		t.Fatalf("expected grok-4.3 context window 1000000, got %d", g43.ContextWindow)
+	}
+	if len(g43.Efforts) != 5 || g43.Efforts[0] != "none" || g43.Efforts[4] != "xhigh" {
+		t.Fatalf("expected grok-4.3 efforts [none, low, medium, high, xhigh], got %v", g43.Efforts)
+	}
+
+	// grok-build-0.1 256k context
+	gb := caps("grok-build-0.1")
+	if gb.ContextWindow != 256000 {
+		t.Fatalf("expected grok-build-0.1 context window 256000, got %d", gb.ContextWindow)
+	}
+}
+
