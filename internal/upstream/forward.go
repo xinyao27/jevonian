@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,225 +24,138 @@ import (
 // ForwardDeps are the cross-cutting services one turn's attempts share.
 type ForwardDeps struct {
 	HTTP     *http.Client   // egress client (system proxy / hardened transport)
-	Guard    *guard.Guard   // concurrency cap + breaker; nil means no gating
-	Quota    *quota.Tracker // spend bookkeeping; nil means unbenched
-	Timeouts Timeouts       // layered budgets; zero loads the env defaults
-	// SameHost overrides JEVONIAN_SAME_HOST_RETRIES when non-nil.
+	Auth     *oauth.Resolver
+	Guard    *guard.Registry
+	Quota    *quota.Tracker
+	Timeouts Timeouts
 	SameHost *int
 	Sleep    func(time.Duration)
-	// Now feeds reset parsing; nil means time.Now.
-	Now      func() time.Time
-	Auth     *oauth.Resolver
-	Adapters map[config.ProviderType]AdapterFunc
+	Adapters AdapterFunc
 }
 
-// PlanEntry is one ranked failover candidate: a provider plus the model it
-// serves, with the effort routing chose for it.
-type PlanEntry struct {
-	Provider config.Provider
-	Model    string
-	Effort   string
-}
-
-// AttemptRequest is everything one attempt needs that does not depend on the
-// candidate.
-type AttemptRequest struct {
-	PromptPolicy config.PromptPolicyConfig
-	TokenSaver   config.TokenSaverConfig
-	OnBegin      func()
-	OnRetry      func(RetryAttempt)
-	ClientKind   ClientKind
-	ClientBody   wire.Body // decoded client body; never mutated
-	Stream       bool      // client asked for SSE
-	// MaxOutput resolves a model's output ceiling; nil means unknown.
-	MaxOutput func(model string) int
-	// ExtraHeaders are added to every outbound request (session affinity).
-	ExtraHeaders http.Header
-}
-
-// Attempt is one candidate's classified result. On success, Response.Body is
-// wrapped so the guard slot is released only when the body finishes.
-type Attempt struct {
-	Entry    PlanEntry
-	Plan     WirePlan
-	Adapter  Adapter
-	Stream   bool // upstream was asked to stream
-	Outcome  Outcome
-	Status   int
-	Text     string // drained non-2xx body
-	Err      error  // transport error
-	Response *http.Response
-	Retries  int
-	Blocked  guard.Block
-	// HoldUntil asks Try to open the guard breaker until a host-named deadline
-	// (a queue, a waiting room) rather than a fresh failure count.
-	HoldUntil time.Time
-	// SentEffort is the effort the outgoing body carried, for the ledger.
-	SentEffort  string
-	SavedTokens int
-	// CacheBody is the prepared body used for conservative cache evidence.
-	// CacheEvidenceKnown is false for opaque adapters or unsupported shapes.
-	CacheBody          wire.Body
-	CacheEvidenceKnown bool
-}
-
-// Describe returns the human-readable failure for ledgers and soft errors.
-func (a Attempt) Describe() string {
-	if a.Err != nil {
-		return DescribeError(a.Err)
-	}
-	if a.Blocked != guard.BlockNone {
-		return fmt.Sprintf("provider %q is unavailable (%s)", a.Entry.Provider.Name, a.Blocked)
-	}
-	if a.Text != "" {
-		return a.Text
-	}
-	if a.Status != 0 {
-		return fmt.Sprintf("HTTP %d", a.Status)
-	}
-	return "upstream attempt failed"
-}
-
-// Runner executes attempts. One Runner per process; safe for concurrent use.
+// Runner drives the attempt loop for one plan.
 type Runner struct {
 	deps   ForwardDeps
 	client *Client
-
-	freebuffMu sync.Mutex
-	freebuff   map[string]*freebuffprovider.Manager
 }
 
-// NewRunner builds a Runner from shared deps.
+// NewRunner sets up the attempt runner.
 func NewRunner(deps ForwardDeps) *Runner {
-	timeouts := deps.Timeouts
-	if timeouts == (Timeouts{}) {
-		timeouts = LoadTimeouts()
-	}
-	if deps.Auth == nil {
-		deps.Auth = &oauth.Resolver{HTTP: deps.HTTP, CursorToken: cursorprovider.Token}
-	}
-	if deps.Adapters != nil {
-		copied := make(map[config.ProviderType]AdapterFunc, len(deps.Adapters))
-		for typ, fn := range deps.Adapters {
-			copied[typ] = fn
-		}
-		deps.Adapters = copied
-	}
 	return &Runner{
-		deps:   deps,
-		client: &Client{HTTP: deps.HTTP, Timeouts: timeouts, SameHost: deps.SameHost, Sleep: deps.Sleep},
+		deps: deps,
+		client: &Client{
+			HTTP:     deps.HTTP,
+			Timeouts: deps.Timeouts,
+			SameHost: deps.SameHost,
+			Sleep:    deps.Sleep,
+		},
 	}
 }
 
-// Timeouts exposes the resolved budgets (keepalive/idle settings read them).
-func (r *Runner) Timeouts() Timeouts { return r.client.Timeouts }
-
-func (r *Runner) now() time.Time {
-	if r.deps.Now != nil {
-		return r.deps.Now()
-	}
-	return time.Now()
+// PlanEntry is one candidate the router considered.
+type PlanEntry struct {
+	Provider config.Provider
+	Model    string
+	Effort   string // routing-chosen reasoning effort
+	Skip     bool
+	Reason   string
 }
 
-// Try runs one candidate inside a guard slot: plan wire → adapter → prepare →
-// post → first-byte guard → classify. The caller walks the plan; Try never
-// re-decides routing.
-//
-// Guard accounting (the fix for "one failing provider drags down concurrent
-// requests"): a saturated or tripped provider is skipped immediately with
-// Blocked set — no queueing. Host failures call End(false); success and
-// non-host outcomes End(true) — for a streaming success only once the body is
-// fully read; a client cancel calls Release.
-func (r *Runner) Try(ctx context.Context, req AttemptRequest, entry PlanEntry) Attempt {
-	at := Attempt{Entry: entry}
-	plan, err := PlanUpstreamWire(entry.Provider, req.ClientKind, entry.Model)
+// AttemptRequest is everything a runner needs to know about the turn.
+type AttemptRequest struct {
+	ClientKind    ClientKind
+	Stream        bool
+	Body          wire.Body
+	ExtraHeaders  http.Header
+	PromptPolicy  config.PromptPolicyConfig
+	TokenSaver    config.TokenSaverConfig
+	QuotaGuard    config.QuotaGuardConfig
+	AllowSameHost bool
+	OnRetry       func(RetryAttempt)
+}
+
+// Attempt is the telemetry + result of one model / provider try.
+type Attempt struct {
+	Provider           config.Provider
+	AttemptModel       string
+	Plan               WirePlan
+	Adapter            Adapter
+	Stream             bool
+	Outcome            Outcome
+	Status             int
+	Err                error
+	Retries            int
+	CacheBody          wire.Body
+	CacheEvidenceKnown bool
+	SavedTokens        int
+	SentEffort         string
+	Effort             string
+}
+
+func (r *Runner) adapterFor(p config.Provider, kind ClientKind, plan WirePlan) (Adapter, error) {
+	if r.deps.Adapters != nil {
+		if a, ok := r.deps.Adapters(p, kind, plan); ok {
+			return a, nil
+		}
+	}
+	return AdapterFor(p, kind, plan)
+}
+
+// Try runs one plan entry through guards, egress assembly and upstream POST.
+// Returns the completed attempt record; callers read Outcome and Status.
+func (r *Runner) Try(ctx context.Context, req AttemptRequest, pe PlanEntry) *Attempt {
+	at := &Attempt{
+		Provider:     pe.Provider,
+		AttemptModel: pe.Model,
+		Stream:       req.Stream,
+		Effort:       pe.Effort,
+	}
+
+	plan, err := PlanUpstreamWire(pe.Provider, req.ClientKind, pe.Model)
 	if err != nil {
-		at.Outcome = Outcome{Kind: OutcomeClientError}
+		at.Outcome = Outcome{Kind: OutcomePlanRefusal}
 		at.Status = 400
 		at.Err = err
 		return at
 	}
 	at.Plan = plan
-	adapter, err := AdapterFor(entry.Provider, req.ClientKind, plan)
-	if fn := r.deps.Adapters[entry.Provider.Type]; fn != nil {
-		if custom, ok := fn(entry.Provider, req.ClientKind, plan); ok {
-			adapter, err = custom, nil
-		}
-	}
+
+	adapter, err := r.adapterFor(pe.Provider, req.ClientKind, plan)
 	if err != nil {
-		at.Outcome = Outcome{Kind: OutcomeClientError}
-		at.Status = 400
+		at.Outcome = Outcome{Kind: OutcomePlanRefusal}
+		at.Status = 500
 		at.Err = err
 		return at
 	}
 	at.Adapter = adapter
-	at.Stream = req.Stream || adapter.AlwaysStreams()
-
-	var slot *guard.Attempt
-	if r.deps.Guard != nil {
-		if l, ok := adapter.(concurrencyLimiter); ok {
-			r.deps.Guard.SetLimit(entry.Provider.Name, l.MaxConcurrent())
-		}
-		var block guard.Block
-		slot, block = r.deps.Guard.Begin(entry.Provider.Name)
-		if block != guard.BlockNone {
-			at.Blocked = block
-			at.Outcome = Outcome{Kind: OutcomeHostFailure}
-			return at
-		}
+	if adapter.AlwaysStreams() {
+		at.Stream = true
 	}
 
-	if req.OnBegin != nil {
-		req.OnBegin()
-	}
-	r.attempt(ctx, req, &at)
-
-	switch at.Outcome.Kind {
-	case OutcomeSuccess:
-		if at.Response != nil && at.Response.Body != nil {
-			// Streams end only after the body finishes or the client cancels.
-			at.Response.Body = &guardedBody{ReadCloser: at.Response.Body, slot: slot, ctx: ctx}
-		} else {
-			slot.End(true)
-		}
-	case OutcomeHostFailure:
-		slot.End(false)
-	case OutcomeCanceled:
-		slot.Release()
-	default:
-		// Client errors, quota/rate-limit refusals and provider refusals are
-		// not verdicts about the host's health. A host-named busy-until is a
-		// host verdict, so it holds the breaker instead of End(false)'s count.
-		if !at.HoldUntil.IsZero() {
-			slot.Hold(at.HoldUntil)
-		} else {
-			slot.End(true)
-		}
-	}
+	r.attempt(ctx, req, at)
 	return at
 }
 
-func cacheBodyForEvidence(body wire.Body, req AttemptRequest) (wire.Body, bool) {
-	if req.TokenSaver.Enabled && containsToolResult(body) {
-		return nil, false
+func maxOutputFor(p config.Provider, model string) int {
+	for _, m := range p.Models {
+		if m.ID == model {
+			return m.MaxOutput
+		}
 	}
-	return cloneBody(body), true
+	return 0
 }
 
 func (r *Runner) attempt(ctx context.Context, req AttemptRequest, at *Attempt) {
-	entry := at.Entry
-	provider := entry.Provider
-	maxOutput := 0
-	if req.MaxOutput != nil {
-		maxOutput = req.MaxOutput(entry.Model)
-	}
+	provider := at.Provider
+	maxOutput := maxOutputFor(provider, at.AttemptModel)
+
 	body, err := at.Adapter.Prepare(PrepInput{
 		PromptPolicy: req.PromptPolicy,
 		Provider:     provider,
-		Model:        entry.Model,
-		Effort:       entry.Effort,
+		Model:        at.AttemptModel,
+		Effort:       at.Effort,
 		ClientKind:   req.ClientKind,
-		ClientBody:   cloneBody(req.ClientBody),
+		ClientBody:   req.Body,
 		UpstreamWire: at.Plan.Wire,
 		Bridge:       at.Plan.Bridge,
 		Stream:       at.Stream,
@@ -324,6 +238,18 @@ func (r *Runner) attempt(ctx context.Context, req AttemptRequest, at *Attempt) {
 			at.Retries += 1 + result.Retries
 		}
 	}
+	if err == nil && result.Response.StatusCode == 400 &&
+		strings.Contains(result.Text, "thinking") &&
+		strings.Contains(result.Text, "cannot be modified") {
+		if strippedBody, changed := StripAllThinking(body); changed {
+			opts.Body = MarshalBody(strippedBody)
+			if req.OnRetry != nil {
+				req.OnRetry(RetryAttempt{Failure: RetryFailure{Status: 400}})
+			}
+			result, err = r.client.Post(ctx, opts)
+			at.Retries += 1 + result.Retries
+		}
+	}
 	if err != nil {
 		at.Err = err
 		at.Outcome = Classify(0, "", err)
@@ -338,147 +264,16 @@ func (r *Runner) attempt(ctx context.Context, req AttemptRequest, at *Attempt) {
 		r.deps.Quota.CaptureRateLimitHeaders(provider.Name, resp.Header)
 	}
 	at.Status = resp.StatusCode
-	at.Text = result.Text
-
-	if at.Status >= 200 && at.Status < 300 && at.Stream {
-		guarded, gerr := GuardFirstByte(ctx, resp, r.client.Timeouts.FirstByteMS)
-		if gerr != nil {
-			at.Err = gerr
-			at.Outcome = Classify(0, "", gerr)
-			if ctx.Err() != nil {
-				at.Outcome = Outcome{Kind: OutcomeCanceled}
-			}
-			return
-		}
-		resp = guarded
-		resp.Body = softstream.IdleGuard(resp.Body, r.client.Timeouts.IdleMS)
-	}
-	if wrapper, ok := at.Adapter.(responseWrapper); ok && at.Status >= 200 && at.Status < 300 {
-		wrapped, werr := wrapper.WrapResponse(resp, at.Stream, entry.Model)
-		if werr != nil {
-			at.Err = werr
-			at.Outcome = Classify(0, "", werr)
-			return
-		}
-		resp = wrapped
-	}
-	at.Response = resp
-	at.Outcome = Classify(at.Status, at.Text, nil)
-	// Header exhaustion is a same-request quota failover for provider-side
-	// refusals (401/403/429/5xx), even when the body carried no spend token.
-	// Do not rewrite a client error (400 Unsupported parameter, …) — that
-	// would hide the real failure behind a fake "quota" label and keep
-	// failover walking. Do not replace the measured window.
-	if at.Status >= 300 && at.Outcome.Signal == quota.SignalNone &&
-		(at.Outcome.Kind == OutcomeHostFailure || at.Outcome.Kind == OutcomeRateLimit || at.Outcome.Kind == OutcomeProviderRefusal) &&
-		r.deps.Quota != nil &&
-		r.deps.Quota.ProviderHealth(provider, quota.HealthOptions{}).Status == quota.StatusExhausted {
-		at.Outcome.Kind = OutcomeQuotaRefusal
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		at.Outcome = Outcome{Kind: OutcomeSuccess}
 		return
 	}
-	r.bench(provider, at)
+	at.Outcome = Classify(resp.StatusCode, result.Text, nil)
 }
 
-// bench records quota/billing/rate-limit refusals in internal/quota. Host
-// failures are deliberately absent: they belong to the guard breaker, and
-// marking them as spend would show a flaky host as "exhausted".
-func (r *Runner) bench(provider config.Provider, at *Attempt) {
-	t := r.deps.Quota
-	if t == nil {
-		return
+func cacheBodyForEvidence(body wire.Body, req AttemptRequest) (wire.Body, bool) {
+	if req.TokenSaver.Enabled && containsToolResult(body) {
+		return nil, false
 	}
-	switch at.Outcome.Kind {
-	case OutcomeQuotaRefusal:
-		label, resets := quota.UsageLimitReset(at.Outcome.Signal, at.Text, r.now())
-		at.Outcome.Label = label
-		if !resets.IsZero() {
-			at.Outcome.Resets = resets.UnixMilli()
-		}
-		t.MarkSpent(provider.Name, quota.MarkSpentOptions{Label: label, ResetsAt: resets})
-	case OutcomeRateLimit:
-		// Nothing recorded this refusal; bench briefly so the next turn's routing
-		// does not pick the same host straight back up — unless the response's
-		// own headers already marked the account exhausted.
-		if t.ProviderHealth(provider, quota.HealthOptions{}).Status == quota.StatusExhausted {
-			return
-		}
-		t.MarkSpent(provider.Name, quota.MarkSpentOptions{
-			Label:    "rate-limit",
-			ResetsAt: r.now().Add(quota.ProviderCooldown),
-		})
-	}
-}
-
-// guardedBody holds the guard slot until the stream finishes.
-type guardedBody struct {
-	io.ReadCloser
-	slot *guard.Attempt
-	ctx  context.Context
-	once sync.Once
-	err  error
-}
-
-func (g *guardedBody) Read(p []byte) (int, error) {
-	n, err := g.ReadCloser.Read(p)
-	if err != nil && !errors.Is(err, io.EOF) {
-		g.err = err
-	}
-	if errors.Is(err, io.EOF) {
-		g.finish()
-	}
-	return n, err
-}
-
-func (g *guardedBody) Close() error {
-	err := g.ReadCloser.Close()
-	g.finish()
-	return err
-}
-
-func (g *guardedBody) finish() {
-	g.once.Do(func() {
-		switch {
-		case g.ctx != nil && g.ctx.Err() != nil:
-			g.slot.Release()
-		case g.err != nil && (IsRetryableError(g.err) || IsTimeout(g.err)):
-			g.slot.End(false)
-		default:
-			g.slot.End(true)
-		}
-	})
-}
-
-func cloneBody(b wire.Body) wire.Body {
-	out := make(wire.Body, len(b))
-	for k, v := range b {
-		out[k] = v
-	}
-	return out
-}
-
-func sentEffort(body wire.Body, w config.UpstreamWire) string {
-	switch w {
-	case KindAnthropic:
-		if oc, ok := body["output_config"].(map[string]any); ok {
-			if e, ok := oc["effort"].(string); ok {
-				return e
-			}
-		}
-		if th, ok := body["thinking"].(map[string]any); ok {
-			if t, _ := th["type"].(string); t == "enabled" || t == "adaptive" {
-				return t
-			}
-		}
-	case KindResponses:
-		if r, ok := body["reasoning"].(map[string]any); ok {
-			if e, ok := r["effort"].(string); ok {
-				return e
-			}
-		}
-	default:
-		if e, ok := body["reasoning_effort"].(string); ok {
-			return e
-		}
-	}
-	return ""
+	return body, true
 }

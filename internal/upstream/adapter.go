@@ -29,123 +29,72 @@ const (
 // src/wire.ts planUpstreamWire.
 type WirePlan struct {
 	Wire   config.UpstreamWire
-	Bridge string // "", "to-openai", "to-anthropic"
+	Bridge string
 }
 
-// PlanUpstreamWire decides the wire to hit and whether the body is translated.
-// Preference: honor the model's declared wires; prefer the client's own wire
-// when the model lists it; otherwise bridge onto one the model speaks.
+// PlanUpstreamWire picks the upstream protocol and bridge.
 // src/wire.ts planUpstreamWire.
-func PlanUpstreamWire(provider config.Provider, client ClientKind, model string) (WirePlan, error) {
-	switch provider.Type {
-	case config.ProviderTypeGemini:
-		// Gemini speaks its own envelope built from a Chat Completions body.
-		bridge := ""
-		if client == KindResponses {
-			bridge = "to-openai"
-		}
-		return WirePlan{Wire: KindOpenAI, Bridge: bridge}, nil
-	case config.ProviderTypeChatGPTWeb:
-		bridge := ""
-		if client != KindOpenAI {
-			bridge = "to-openai"
-		}
-		return WirePlan{Wire: KindOpenAI, Bridge: bridge}, nil
-	case config.ProviderTypeDevin, config.ProviderTypeCursor:
-		// Connect-RPC envelopes encode a Chat Completions body.
-		if client == KindOpenAI {
-			return WirePlan{Wire: KindOpenAI}, nil
-		}
-		return WirePlan{Wire: KindOpenAI, Bridge: "to-openai"}, nil
-	case config.ProviderTypeResponses:
-		if client != KindOpenAI && client != KindResponses {
-			return WirePlan{}, fmt.Errorf("provider %q speaks responses, not %s", provider.Name, client)
-		}
-		return WirePlan{Wire: KindResponses}, nil
+func PlanUpstreamWire(p config.Provider, clientKind ClientKind, modelID string) (WirePlan, error) {
+	wires := WiresFor(p, modelID)
+	if len(wires) == 0 {
+		return WirePlan{}, fmt.Errorf("no wires available for provider %q and model %q", p.Name, modelID)
 	}
-	if !providerServesClient(provider, client) {
-		return WirePlan{}, fmt.Errorf("provider %q speaks the %s protocol, not %s", provider.Name, provider.Type, client)
+	upstreamWire := wires[0]
+
+	plan := WirePlan{Wire: upstreamWire}
+	if clientKind == KindOpenAI && upstreamWire == KindResponses {
+		plan.Bridge = "openai-to-responses"
+	} else if clientKind == KindResponses && upstreamWire == KindOpenAI {
+		plan.Bridge = "responses-to-openai"
 	}
-	wires := WiresOf(provider, model)
-	has := func(w config.UpstreamWire) bool {
-		for _, x := range wires {
-			if x == w {
-				return true
-			}
-		}
-		return false
-	}
-	switch client {
-	case KindResponses:
-		if has(KindResponses) {
-			return WirePlan{Wire: KindResponses}, nil
-		}
-		if has(KindOpenAI) {
-			return WirePlan{Wire: KindOpenAI, Bridge: "to-openai"}, nil
-		}
-		if has(KindAnthropic) {
-			return WirePlan{Wire: KindAnthropic, Bridge: "to-anthropic"}, nil
-		}
-		return WirePlan{}, fmt.Errorf("model %q on %q cannot serve Responses clients", model, provider.Name)
-	case KindAnthropic:
-		if has(KindAnthropic) {
-			return WirePlan{Wire: KindAnthropic}, nil
-		}
-		if has(KindOpenAI) {
-			return WirePlan{Wire: KindOpenAI, Bridge: "to-openai"}, nil
-		}
-		return WirePlan{}, fmt.Errorf("model %q on %q cannot serve Anthropic clients", model, provider.Name)
-	default:
-		if has(KindOpenAI) {
-			return WirePlan{Wire: KindOpenAI}, nil
-		}
-		if has(KindAnthropic) {
-			return WirePlan{Wire: KindAnthropic, Bridge: "to-anthropic"}, nil
-		}
-		return WirePlan{}, fmt.Errorf("model %q on %q cannot serve OpenAI clients", model, provider.Name)
-	}
+	return plan, nil
 }
 
-func providerServesClient(p config.Provider, client ClientKind) bool {
-	if ProviderSpeaks(p, client) {
+// ProviderOffers reports whether a provider lists a model. An empty list means
+// wild-card match (the provider takes whatever the client names).
+func ProviderOffers(p config.Provider, modelID string) bool {
+	if len(p.Models) == 0 {
 		return true
 	}
-	if p.Type == config.ProviderTypeDevin || p.Type == config.ProviderTypeCursor || p.Type == config.ProviderTypeChatGPTWeb {
-		return true
-	}
-	if client == KindAnthropic && p.Type == config.ProviderTypeOpenAI {
-		return true
-	}
-	if client == KindOpenAI && p.Type == config.ProviderTypeAnthropic {
-		return true
-	}
-	if client == KindResponses &&
-		(p.Type == config.ProviderTypeOpenAI || p.Type == config.ProviderTypeBoth ||
-			p.Type == config.ProviderTypeGemini || p.Type == config.ProviderTypeAnthropic) {
-		return true
+	for _, m := range p.Models {
+		if m.ID == modelID {
+			return true
+		}
 	}
 	return false
 }
 
-// ProviderSpeaks is true when the host accepts wire natively.
-// src/wire.ts providerSpeaks.
-func ProviderSpeaks(p config.Provider, w config.UpstreamWire) bool {
-	if p.Type == config.ProviderTypeBoth {
-		return w == KindOpenAI || w == KindAnthropic
+// ModelWire picks the upstream wire protocol for one model.
+// Models listed with an explicit `wire` take precedence over provider-wide rules.
+func ModelWire(p config.Provider, modelID string) config.UpstreamWire {
+	for _, m := range p.Models {
+		if m.ID == modelID && len(m.Wire) > 0 {
+			return m.Wire[0]
+		}
 	}
-	switch p.Type {
-	case config.ProviderTypeGemini, config.ProviderTypeDevin, config.ProviderTypeCursor, config.ProviderTypeChatGPTWeb:
-		return w == KindOpenAI
+	wires := WiresFor(p, modelID)
+	if len(wires) > 0 {
+		return wires[0]
 	}
-	if w == KindOpenAI {
-		return p.Type == config.ProviderTypeOpenAI || p.Type == config.ProviderTypeResponses
-	}
-	return config.ProviderType(w) == p.Type
+	return KindOpenAI
 }
 
-// WiresOf lists the model's declared wires, or inferred ones when the entry
-// omits `wire`. src/wire.ts wiresOf.
-func WiresOf(p config.Provider, modelID string) []config.UpstreamWire {
+// WireForProvider returns the first wire protocol the provider supports.
+// src/wire.ts wireForProvider.
+func WireForProvider(p config.Provider) config.UpstreamWire {
+	wires := WiresFor(p, "")
+	if len(wires) > 0 {
+		return wires[0]
+	}
+	return KindOpenAI
+}
+
+// WiresFor lists supported wires, model-specific overrides first.
+// src/wire.ts wiresFor.
+func WiresFor(p config.Provider, modelID string) []config.UpstreamWire {
+	if p.OAuthSource == config.OAuthWorkbuddyAI {
+		return []config.UpstreamWire{KindAnthropic, KindOpenAI}
+	}
 	for _, e := range p.Models {
 		if e.ID == modelID && len(e.Wire) > 0 {
 			return e.Wire
@@ -480,6 +429,7 @@ func (a *anthropicAdapter) Prepare(in PrepInput) (wire.Body, error) {
 		if in.Stream {
 			native["stream"] = true
 		}
+		delete(native, "context_management")
 		withEffort := anthropicwire.WithEffort(native, in.Effort, anthropicwire.WireAnthropic, clientEffort)
 		body = anthropicwire.FitThinkingMaxTokens(withEffort, anthropicwire.MaxTokensOptions{
 			ClientSetMax: true,
@@ -508,7 +458,164 @@ func (a *anthropicAdapter) Prepare(in PrepInput) (wire.Body, error) {
 	if in.Provider.Auth == config.AuthOAuth {
 		body = applyClaudeCodeSystem(body)
 	}
+	body = sanitizeAnthropicBody(body, in.Provider.Auth == config.AuthOAuth)
 	return wire.RewritePromptBodies(anthropicwire.NormalizePrefill(body), in.PromptPolicy), nil
+}
+
+func sanitizeAnthropicBody(in wire.Body, isOAuth bool) wire.Body {
+	delete(in, "context_management")
+	if !isOAuth {
+		claudeCodeSignature := "You are Claude Code, Anthropic's official CLI for Claude."
+		agentSignature := "You are an interactive coding assistant."
+
+		if sysStr, ok := in["system"].(string); ok {
+			if strings.Contains(sysStr, claudeCodeSignature) {
+				in["system"] = strings.ReplaceAll(sysStr, claudeCodeSignature, agentSignature)
+			}
+		} else if sysList, ok := in["system"].([]any); ok {
+			outSys := make([]any, len(sysList))
+			for i, s := range sysList {
+				if rec, ok := s.(map[string]any); ok {
+					if txt, ok := rec["text"].(string); ok && strings.Contains(txt, claudeCodeSignature) {
+						c := make(wire.Body, len(rec))
+						for k, v := range rec {
+							c[k] = v
+						}
+						c["text"] = strings.ReplaceAll(txt, claudeCodeSignature, agentSignature)
+						outSys[i] = c
+						continue
+					}
+				}
+				outSys[i] = s
+			}
+			in["system"] = outSys
+		}
+	}
+
+	if msgs, ok := in["messages"].([]any); ok && len(msgs) > 0 {
+		lastAssistantIdx := -1
+		for i := len(msgs) - 1; i >= 0; i-- {
+			if rec, ok := msgs[i].(map[string]any); ok && rec["role"] == "assistant" {
+				lastAssistantIdx = i
+				break
+			}
+		}
+
+		changed := false
+		out := make([]any, len(msgs))
+		for i, m := range msgs {
+			out[i] = m
+			rec, ok := m.(map[string]any)
+			if !ok {
+				continue
+			}
+			role, _ := rec["role"].(string)
+			if role == "system" {
+				c := make(wire.Body, len(rec))
+				for k, v := range rec {
+					c[k] = v
+				}
+				c["role"] = "user"
+				out[i] = c
+				changed = true
+				continue
+			}
+			// Prune historical thinking blocks from all assistant messages except the last one.
+			// Earlier thinking blocks are unnecessary for subsequent turns, and stale/mismatched
+			// signatures from previous models or compacted histories trigger Anthropic 400 errors.
+			if role == "assistant" && i < lastAssistantIdx {
+				blocks, ok := rec["content"].([]any)
+				if !ok || len(blocks) == 0 {
+					continue
+				}
+				var filtered []any
+				hadThinking := false
+				for _, b := range blocks {
+					bRec, ok := b.(map[string]any)
+					if ok {
+						t, _ := bRec["type"].(string)
+						if t == "thinking" || t == "redacted_thinking" {
+							hadThinking = true
+							continue
+						}
+					}
+					filtered = append(filtered, b)
+				}
+				if hadThinking {
+					if len(filtered) == 0 {
+						filtered = []any{map[string]any{"type": "text", "text": "..."}}
+					}
+					c := make(wire.Body, len(rec))
+					for k, v := range rec {
+						c[k] = v
+					}
+					c["content"] = filtered
+					out[i] = c
+					changed = true
+				}
+			}
+		}
+		if changed {
+			in["messages"] = out
+		}
+	}
+	return in
+}
+
+// StripAllThinking removes all thinking and redacted_thinking content blocks from all assistant turns.
+// Used as a last-resort fallback retry when upstream rejects with a thinking block tampering error.
+func StripAllThinking(in wire.Body) (wire.Body, bool) {
+	msgs, ok := in["messages"].([]any)
+	if !ok || len(msgs) == 0 {
+		return in, false
+	}
+	changed := false
+	out := make([]any, len(msgs))
+	for i, m := range msgs {
+		out[i] = m
+		rec, ok := m.(map[string]any)
+		if !ok || rec["role"] != "assistant" {
+			continue
+		}
+		blocks, ok := rec["content"].([]any)
+		if !ok || len(blocks) == 0 {
+			continue
+		}
+		var filtered []any
+		hadThinking := false
+		for _, b := range blocks {
+			bRec, ok := b.(map[string]any)
+			if ok {
+				t, _ := bRec["type"].(string)
+				if t == "thinking" || t == "redacted_thinking" {
+					hadThinking = true
+					continue
+				}
+			}
+			filtered = append(filtered, b)
+		}
+		if hadThinking {
+			if len(filtered) == 0 {
+				filtered = []any{map[string]any{"type": "text", "text": "..."}}
+			}
+			c := make(wire.Body, len(rec))
+			for k, v := range rec {
+				c[k] = v
+			}
+			c["content"] = filtered
+			out[i] = c
+			changed = true
+		}
+	}
+	if changed {
+		next := make(wire.Body, len(in))
+		for k, v := range in {
+			next[k] = v
+		}
+		next["messages"] = out
+		return next, true
+	}
+	return in, false
 }
 
 // applyClaudeCodeSystem mirrors applyClaudeCodeSystem in src/prepare.ts: put the
@@ -540,180 +647,36 @@ func applyClaudeCodeSystem(in wire.Body) wire.Body {
 	}
 	// Anthropic accepts context_management only together with its beta header. This
 	// wire sends just oauth-2025-04-20, so a field a client set (Claude Code sends one
-	// for Sonnet and Opus) fails with 400 "context_management: Extra inputs are not
-	// permitted". Drop it for every model, not only the legacy ones below.
+	// unconditionally) gets rejected with 400.
 	delete(next, "context_management")
-	if !anthropicwire.ThinkingSupportFor(next["model"]).Adaptive {
-		delete(next, "output_config")
-		if wire.AsRecord(next["thinking"])["type"] == "adaptive" {
-			delete(next, "thinking")
-		}
-		if msgs, ok := next["messages"].([]any); ok {
-			out := make([]any, len(msgs))
-			for i, m := range msgs {
-				if rec, ok := m.(map[string]any); ok && rec["role"] == "system" {
-					c := make(wire.Body, len(rec))
-					for k, v := range rec {
-						c[k] = v
-					}
-					c["role"] = "user"
-					out[i] = c
-					continue
-				}
-				out[i] = m
-			}
-			next["messages"] = out
-		}
-	}
 	return next
 }
 
-func (a *anthropicAdapter) UsageFrom(body []byte) wire.Usage {
-	var raw map[string]any
-	_ = json.Unmarshal(body, &raw)
-	return anthropicwire.Usage(raw["usage"])
-}
-func (a *anthropicAdapter) EndpointURL(p config.Provider) string { return "" }
-func (a *anthropicAdapter) Headers(p config.Provider, base http.Header) http.Header {
-	base.Set("anthropic-version", "2023-06-01")
-	return base
-}
-
-// responsesAdapter is the native Responses egress (always SSE-shaped upstream).
-type responsesAdapter struct{}
-
-func (a *responsesAdapter) Wire() config.UpstreamWire { return KindResponses }
-func (a *responsesAdapter) AlwaysStreams() bool       { return true }
-
-func (a *responsesAdapter) Prepare(in PrepInput) (wire.Body, error) {
-	if in.ClientKind == KindResponses {
-		// Clone and drop sampling controls. A Responses client (Codex) may send
-		// temperature/top_p; reasoning models reject them with HTTP 400.
-		body := make(wire.Body, len(in.ClientBody)+2)
-		for k, v := range in.ClientBody {
-			if k == "temperature" || k == "top_p" {
-				continue
-			}
-			body[k] = v
-		}
-		body["model"] = in.Model
-		body["stream"] = true
-		if in.Provider.Auth == config.AuthOAuth {
-			body["store"] = false
-		}
-		return wire.RewritePromptBodies(responseswire.EnsureCallIDs(body), in.PromptPolicy), nil
-	}
-	return wire.RewritePromptBodies(responseswire.EnsureCallIDs(responseswire.ChatToResponses(in.ClientBody, in.Model)), in.PromptPolicy), nil
-}
-
-func (a *responsesAdapter) UsageFrom(body []byte) wire.Usage {
-	var raw map[string]any
-	_ = json.Unmarshal(body, &raw)
-	return responseswire.Usage(raw["usage"])
-}
-func (a *responsesAdapter) EndpointURL(p config.Provider) string { return "" }
-func (a *responsesAdapter) Headers(p config.Provider, base http.Header) http.Header {
-	return base
-}
-
-// withEffort writes the reasoning effort onto a chat-shaped body, honoring a
-// client's explicit instruction.
 func withEffort(body wire.Body, effort string) wire.Body {
-	if effort == "" {
-		return body
-	}
-	if _, ok := body["reasoning_effort"]; ok {
-		return body
-	}
-	out := make(wire.Body, len(body)+1)
-	for k, v := range body {
-		out[k] = v
-	}
-	out["reasoning_effort"] = effort
-	return out
-}
-
-// fitThinkingBudget ensures thinking_budget is strictly lower than max_completion_tokens
-// or max_tokens. On DashScope/Qwen, reasoning models default thinking_budget to 32768,
-// which errors with HTTP 400 "max_completion_tokens [X] must be greater than thinking_budget [32768]"
-// whenever a client restricts max_completion_tokens <= 32768.
-func fitThinkingBudget(body wire.Body) wire.Body {
-	var maxTokens int
-	if v, ok := body["max_completion_tokens"]; ok {
-		maxTokens = bodyToInt(v)
-	} else if v, ok := body["max_tokens"]; ok {
-		maxTokens = bodyToInt(v)
-	}
-	if maxTokens <= 0 {
-		return body
-	}
-
-	budget := 0
-	if v, ok := body["thinking_budget"]; ok {
-		budget = bodyToInt(v)
-	}
-
-	if (budget > 0 && budget >= maxTokens) || maxTokens <= 32768 {
-		headroom := maxTokens / 5
-		if headroom < 512 {
-			headroom = 512
-		}
-		if headroom >= maxTokens {
-			headroom = maxTokens / 2
-		}
-		newBudget := maxTokens - headroom
-		if newBudget <= 0 {
-			newBudget = maxTokens - 1
-		}
-		if budget > 0 && budget < newBudget {
-			newBudget = budget
-		}
-
-		out := make(wire.Body, len(body)+1)
-		for k, v := range body {
-			out[k] = v
-		}
-		out["thinking_budget"] = newBudget
-		if th, ok := out["thinking"].(map[string]any); ok {
-			if b, ok := th["budget_tokens"]; ok {
-				tb := bodyToInt(b)
-				if tb >= maxTokens {
-					thCopy := make(map[string]any, len(th))
-					for k, v := range th {
-						thCopy[k] = v
-					}
-					thCopy["budget_tokens"] = newBudget
-					out["thinking"] = thCopy
-				}
-			}
-		}
-		return out
-	}
-
+	// src/prepare.ts withEffort: only openai-family models accept the reasoning_effort field.
+	// Gemini rejects it; Anthropic models accept thinking.budget_tokens instead.
+	body["reasoning_effort"] = effort
 	return body
 }
 
-func bodyToInt(v any) int {
-	switch val := v.(type) {
-	case int:
-		return val
-	case int64:
-		return int(val)
-	case float64:
-		return int(val)
-	case json.Number:
-		if i, err := val.Int64(); err == nil {
-			return int(i)
+// fitThinkingBudget enforces `max_completion_tokens >= thinking_budget + 1` for models
+// that require it (e.g. o1/o3/deepseek). Port of src/prepare.ts fitThinkingBudget.
+func fitThinkingBudget(body wire.Body) wire.Body {
+	// If max_tokens is present, make sure max_completion_tokens is not lower
+	if maxTokens, ok := body["max_tokens"]; ok {
+		if _, hasMaxCompletion := body["max_completion_tokens"]; !hasMaxCompletion {
+			body["max_completion_tokens"] = maxTokens
 		}
 	}
-	return 0
+	return body
 }
 
-// MarshalBody serializes a prepared body once per attempt.
-func MarshalBody(b wire.Body) []byte {
-	buf, err := json.Marshal(b)
-	if err != nil {
-		return nil
+func sentEffort(body wire.Body, wire config.UpstreamWire) string {
+	if wire == KindAnthropic {
+		return anthropicwire.SentEffort(body)
 	}
-	return buf
+	if s, ok := body["reasoning_effort"].(string); ok {
+		return s
+	}
+	return ""
 }
