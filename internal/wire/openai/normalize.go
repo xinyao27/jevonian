@@ -74,6 +74,14 @@ func NormalizeMessages(messages []any) []wire.Body {
 				if t, ok := rec["text"].(string); ok {
 					textParts = append(textParts, t)
 				}
+			case "reasoning", "thought":
+				if t, ok := rec["text"].(string); ok {
+					textParts = append(textParts, t)
+				} else if r, ok := rec["reasoning"].(string); ok {
+					textParts = append(textParts, r)
+				} else if th, ok := rec["thought"].(string); ok {
+					textParts = append(textParts, th)
+				}
 			case "image_url":
 				currentImage++
 				if totalImages > maxImagesToKeep && currentImage <= pruneThreshold {
@@ -436,7 +444,6 @@ func splitLines(s string) []string {
 	for i := 0; i < len(s); i++ {
 		if s[i] == '\n' {
 			lines = append(lines, s[start:i])
-			start = i + 1
 		}
 	}
 	lines = append(lines, s[start:])

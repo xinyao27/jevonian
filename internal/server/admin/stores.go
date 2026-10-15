@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/xinyao27/jevonian/internal/keys"
@@ -33,7 +34,11 @@ func OpenSQLiteLogs(path string) (*SQLiteLogs, error) {
 	if err != nil {
 		return nil, err
 	}
-	dsn := paths.SQLiteFileURL(abs)
+	clean := filepath.ToSlash(abs)
+	if !strings.HasPrefix(clean, "/") {
+		clean = "/" + clean
+	}
+	dsn := url.URL{Scheme: "file", Path: clean}
 	params := url.Values{}
 	params.Add("_pragma", "busy_timeout(5000)")
 	dsn.RawQuery = params.Encode()
@@ -77,7 +82,7 @@ func decodeLogRows(rows *sql.Rows) ([]LogRecord, error) {
 }
 
 func decodeLogRow(rows *sql.Rows, columns []string) (LogRecord, error) {
-	names := map[string]string{"request_id": "requestId", "latency_ms": "latencyMs", "prompt_tokens": "promptTokens", "completion_tokens": "completionTokens", "cache_read_tokens": "cacheReadTokens", "cache_write_tokens": "cacheWriteTokens", "cost_usd": "costUsd", "pricing_known": "pricingKnown", "requested_model": "requestedModel", "effort_note": "effortNote", "saved_tokens": "savedTokens", "ttft_ms": "ttftMs", "key_id": "keyId", "key_name": "keyName", "switch_penalty_usd": "switchPenaltyUsd", "brain_channel": "brainChannel", "cache_keep": "cacheKeep", "exclusive_input": "exclusiveInput"}
+	names := map[string]string{"request_id": "requestId", "latency_ms": "latencyMs", "prompt_tokens": "promptTokens", "completion_tokens": "completionTokens", "cache_read_tokens": "cacheReadTokens", "cache_write_tokens": "cacheWriteTokens", "cost_usd": "costUsd", "pricing_known": "pricingKnown", "requested_model": "requestedModel", "effort_note": "effortNote", "saved_tokens": "savedTokens", "ttft_ms": "ttftMs", "key_id": "keyId", "key_name": "keyName", "switch_penalty_usd": "switchPenaltyUsd", "brain_channel": "brainChannel", "cache_keep": "cacheKeep"}
 	required := map[string]bool{"id": true, "ts": true, "session": true, "path": true, "provider": true, "model": true, "stream": true, "status": true, "latencyMs": true, "promptTokens": true, "completionTokens": true, "cacheReadTokens": true, "cacheWriteTokens": true, "costUsd": true, "pricingKnown": true}
 	v := make([]any, len(columns))
 	ptr := make([]any, len(columns))
@@ -106,7 +111,7 @@ func decodeLogRow(rows *sql.Rows, columns []string) (LogRecord, error) {
 		if x == "" && !required[key] {
 			continue
 		}
-		if key == "stream" || key == "pricingKnown" || key == "routed" || key == "exclusiveInput" {
+		if key == "stream" || key == "pricingKnown" || key == "routed" {
 			x = number(x) != 0
 		}
 		if key == "tries" || key == "skipped" || key == "cache" {

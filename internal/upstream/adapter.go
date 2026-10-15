@@ -45,12 +45,6 @@ func PlanUpstreamWire(provider config.Provider, client ClientKind, model string)
 			bridge = "to-openai"
 		}
 		return WirePlan{Wire: KindOpenAI, Bridge: bridge}, nil
-	case config.ProviderTypeChatGPTWeb:
-		bridge := ""
-		if client != KindOpenAI {
-			bridge = "to-openai"
-		}
-		return WirePlan{Wire: KindOpenAI, Bridge: bridge}, nil
 	case config.ProviderTypeDevin, config.ProviderTypeCursor:
 		// Connect-RPC envelopes encode a Chat Completions body.
 		if client == KindOpenAI {
@@ -110,7 +104,7 @@ func providerServesClient(p config.Provider, client ClientKind) bool {
 	if ProviderSpeaks(p, client) {
 		return true
 	}
-	if p.Type == config.ProviderTypeDevin || p.Type == config.ProviderTypeCursor || p.Type == config.ProviderTypeChatGPTWeb {
+	if p.Type == config.ProviderTypeDevin || p.Type == config.ProviderTypeCursor {
 		return true
 	}
 	if client == KindAnthropic && p.Type == config.ProviderTypeOpenAI {
@@ -134,7 +128,7 @@ func ProviderSpeaks(p config.Provider, w config.UpstreamWire) bool {
 		return w == KindOpenAI || w == KindAnthropic
 	}
 	switch p.Type {
-	case config.ProviderTypeGemini, config.ProviderTypeDevin, config.ProviderTypeCursor, config.ProviderTypeChatGPTWeb:
+	case config.ProviderTypeGemini, config.ProviderTypeDevin, config.ProviderTypeCursor:
 		return w == KindOpenAI
 	}
 	if w == KindOpenAI {
@@ -161,7 +155,7 @@ func inferModelWires(p config.Provider, modelID string) []config.UpstreamWire {
 	case config.ProviderTypeResponses:
 		return []config.UpstreamWire{KindResponses}
 	case config.ProviderTypeGemini, config.ProviderTypeDevin, config.ProviderTypeCursor,
-		config.ProviderTypeChatGPTWeb, config.ProviderTypeOpenAI:
+		config.ProviderTypeOpenAI:
 		return []config.UpstreamWire{KindOpenAI}
 	case config.ProviderTypeBoth:
 		if anthropicwire.NeedsWire(modelID) {
@@ -380,6 +374,17 @@ type concurrencyLimiter interface{ MaxConcurrent() int }
 // tokenSaverOptOut skips tool-result compression for hosts outside parity.
 type tokenSaverOptOut interface{ SkipsTokenSaver() bool }
 
+// exclusiveInputUsage marks usage whose input count already excludes cache
+// reads (Anthropic Messages, Connect-RPC hosts).
+type exclusiveInputUsage interface{ ExclusiveInput() bool }
+
+// ExclusiveInput reports whether an adapter's usage input already excludes
+// cache reads, so cache observations must not subtract them again.
+func ExclusiveInput(a Adapter) bool {
+	e, ok := a.(exclusiveInputUsage)
+	return ok && e.ExclusiveInput()
+}
+
 // AdapterFunc selects an adapter for one runner. No mutable process registry is
 // shared across independent servers or tests.
 type AdapterFunc func(provider config.Provider, clientKind ClientKind, plan WirePlan) (Adapter, bool)
@@ -388,8 +393,6 @@ type AdapterFunc func(provider config.Provider, clientKind ClientKind, plan Wire
 // that maps provider identity to behavior.
 func AdapterFor(provider config.Provider, clientKind ClientKind, plan WirePlan) (Adapter, error) {
 	switch provider.Type {
-	case config.ProviderTypeChatGPTWeb:
-		return &chatGPTWebAdapter{rpcAdapter: rpcAdapter{chat: chatgptWebChat}}, nil
 	case config.ProviderTypeDevin:
 		return &rpcAdapter{chat: devinChat}, nil
 	case config.ProviderTypeCursor:
@@ -427,6 +430,15 @@ func (a *openaiAdapter) Prepare(in PrepInput) (wire.Body, error) {
 		body = anthropicwire.ToChatRequest(body, in.Model)
 	case KindResponses:
 		body = responseswire.ToChatRequest(in.ClientBody, in.Model)
+	default:
+		if msgs, ok := body["messages"].([]any); ok {
+			normalized := openaiwire.NormalizeMessages(msgs)
+			msgsOut := make([]any, len(normalized))
+			for i, m := range normalized {
+				msgsOut[i] = m
+			}
+			body["messages"] = msgsOut
+		}
 	}
 	body["model"] = in.Model
 	if in.Stream {
@@ -435,9 +447,8 @@ func (a *openaiAdapter) Prepare(in PrepInput) (wire.Body, error) {
 	if in.Effort != "" {
 		body = withEffort(body, in.Effort)
 	}
-	body = fitThinkingBudget(body)
 	// src/prepare.ts: ask streaming Chat Completions hosts to report usage.
-	if in.ClientKind == KindOpenAI && (in.Provider.Type == config.ProviderTypeOpenAI || in.Provider.Type == config.ProviderTypeChatGPTWeb) &&
+	if in.ClientKind == KindOpenAI && in.Provider.Type == config.ProviderTypeOpenAI &&
 		in.ClientStream && in.Provider.InjectStreamUsage {
 		if _, set := body["stream_options"]; !set {
 			body["stream_options"] = map[string]any{"include_usage": true}
@@ -454,11 +465,6 @@ func (a *openaiAdapter) EndpointURL(p config.Provider) string { return "" }
 func (a *openaiAdapter) Headers(p config.Provider, base http.Header) http.Header {
 	return base
 }
-
-type chatGPTWebAdapter struct{ rpcAdapter }
-
-func (*chatGPTWebAdapter) MaxConcurrent() int    { return 1 }
-func (*chatGPTWebAdapter) SkipsTokenSaver() bool { return true }
 
 // anthropicAdapter is the Anthropic Messages egress.
 type anthropicAdapter struct{}
@@ -538,12 +544,8 @@ func applyClaudeCodeSystem(in wire.Body) wire.Body {
 	default:
 		next["system"] = []any{prompt(true)}
 	}
-	// Anthropic accepts context_management only together with its beta header. This
-	// wire sends just oauth-2025-04-20, so a field a client set (Claude Code sends one
-	// for Sonnet and Opus) fails with 400 "context_management: Extra inputs are not
-	// permitted". Drop it for every model, not only the legacy ones below.
-	delete(next, "context_management")
 	if !anthropicwire.ThinkingSupportFor(next["model"]).Adaptive {
+		delete(next, "context_management")
 		delete(next, "output_config")
 		if wire.AsRecord(next["thinking"])["type"] == "adaptive" {
 			delete(next, "thinking")
@@ -573,6 +575,7 @@ func (a *anthropicAdapter) UsageFrom(body []byte) wire.Usage {
 	_ = json.Unmarshal(body, &raw)
 	return anthropicwire.Usage(raw["usage"])
 }
+func (a *anthropicAdapter) ExclusiveInput() bool                 { return true }
 func (a *anthropicAdapter) EndpointURL(p config.Provider) string { return "" }
 func (a *anthropicAdapter) Headers(p config.Provider, base http.Header) http.Header {
 	base.Set("anthropic-version", "2023-06-01")
@@ -587,15 +590,7 @@ func (a *responsesAdapter) AlwaysStreams() bool       { return true }
 
 func (a *responsesAdapter) Prepare(in PrepInput) (wire.Body, error) {
 	if in.ClientKind == KindResponses {
-		// Clone and drop sampling controls. A Responses client (Codex) may send
-		// temperature/top_p; reasoning models reject them with HTTP 400.
-		body := make(wire.Body, len(in.ClientBody)+2)
-		for k, v := range in.ClientBody {
-			if k == "temperature" || k == "top_p" {
-				continue
-			}
-			body[k] = v
-		}
+		body := in.ClientBody
 		body["model"] = in.Model
 		body["stream"] = true
 		if in.Provider.Auth == config.AuthOAuth {
@@ -631,82 +626,6 @@ func withEffort(body wire.Body, effort string) wire.Body {
 	}
 	out["reasoning_effort"] = effort
 	return out
-}
-
-// fitThinkingBudget ensures thinking_budget is strictly lower than max_completion_tokens
-// or max_tokens. On DashScope/Qwen, reasoning models default thinking_budget to 32768,
-// which errors with HTTP 400 "max_completion_tokens [X] must be greater than thinking_budget [32768]"
-// whenever a client restricts max_completion_tokens <= 32768.
-func fitThinkingBudget(body wire.Body) wire.Body {
-	var maxTokens int
-	if v, ok := body["max_completion_tokens"]; ok {
-		maxTokens = bodyToInt(v)
-	} else if v, ok := body["max_tokens"]; ok {
-		maxTokens = bodyToInt(v)
-	}
-	if maxTokens <= 0 {
-		return body
-	}
-
-	budget := 0
-	if v, ok := body["thinking_budget"]; ok {
-		budget = bodyToInt(v)
-	}
-
-	if (budget > 0 && budget >= maxTokens) || maxTokens <= 32768 {
-		headroom := maxTokens / 5
-		if headroom < 512 {
-			headroom = 512
-		}
-		if headroom >= maxTokens {
-			headroom = maxTokens / 2
-		}
-		newBudget := maxTokens - headroom
-		if newBudget <= 0 {
-			newBudget = maxTokens - 1
-		}
-		if budget > 0 && budget < newBudget {
-			newBudget = budget
-		}
-
-		out := make(wire.Body, len(body)+1)
-		for k, v := range body {
-			out[k] = v
-		}
-		out["thinking_budget"] = newBudget
-		if th, ok := out["thinking"].(map[string]any); ok {
-			if b, ok := th["budget_tokens"]; ok {
-				tb := bodyToInt(b)
-				if tb >= maxTokens {
-					thCopy := make(map[string]any, len(th))
-					for k, v := range th {
-						thCopy[k] = v
-					}
-					thCopy["budget_tokens"] = newBudget
-					out["thinking"] = thCopy
-				}
-			}
-		}
-		return out
-	}
-
-	return body
-}
-
-func bodyToInt(v any) int {
-	switch val := v.(type) {
-	case int:
-		return val
-	case int64:
-		return int(val)
-	case float64:
-		return int(val)
-	case json.Number:
-		if i, err := val.Int64(); err == nil {
-			return int(i)
-		}
-	}
-	return 0
 }
 
 // MarshalBody serializes a prepared body once per attempt.

@@ -1,6 +1,8 @@
 package upstream
 
 import (
+	"strings"
+
 	"github.com/xinyao27/jevonian/internal/quota"
 )
 
@@ -88,6 +90,9 @@ func Classify(status int, body string, err error) Outcome {
 		return Outcome{Kind: OutcomeRateLimit}
 	}
 	if quota.IsProviderRefusal(status) {
+		return Outcome{Kind: OutcomeProviderRefusal}
+	}
+	if status == 400 && (strings.Contains(body, "Unexpected item type in content") || strings.Contains(body, "invalid_parameter_error")) {
 		return Outcome{Kind: OutcomeProviderRefusal}
 	}
 	return Outcome{Kind: OutcomeClientError}
