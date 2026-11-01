@@ -252,6 +252,11 @@ func (t *turn) run(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 			}
+			// When compaction is unavailable or insufficient, fail over to the next
+			// candidate in the plan (e.g. models with larger context windows).
+			if t.failover() {
+				continue
+			}
 			t.writeRefusal(w, attempt)
 			return
 		case upstream.OutcomeClientError:
