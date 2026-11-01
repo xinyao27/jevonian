@@ -24,7 +24,7 @@ func (s *Server) nativeCodexPassthrough(w http.ResponseWriter, r *http.Request, 
 	// A caller holding a real Jevonian key is talking to Jevonian: a concrete
 	// model it names is routed locally, never forwarded to OpenAI with that key.
 	// src/server.ts c.set("jevoKey", true).
-	if isJevoKey(keyID) {
+	if isJevoKey(keyID) || strings.Contains(r.Header.Get("Authorization"), "sk-jev-") {
 		return false
 	}
 	route, ok := multiacct.ShouldProxyNativeCodex(model, r.Header)
@@ -158,5 +158,12 @@ func isDesktopRoutedModel(model string) bool {
 	if id == "" {
 		return false
 	}
-	return id == "auto" || strings.HasPrefix(id, "jevonian/")
+	if id == "auto" || strings.HasPrefix(id, "jevonian/") {
+		return true
+	}
+	switch id {
+	case "plan", "execute", "agent", "subagent", "utility", "chat":
+		return true
+	}
+	return false
 }

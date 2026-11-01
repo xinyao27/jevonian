@@ -16,7 +16,14 @@ func isDesktopRoutedModel(model string) bool {
 	if id == "" {
 		return false
 	}
-	return id == "auto" || strings.HasPrefix(id, "jevonian/")
+	if id == "auto" || strings.HasPrefix(id, "jevonian/") {
+		return true
+	}
+	switch id {
+	case "plan", "execute", "agent", "subagent", "utility", "chat":
+		return true
+	}
+	return false
 }
 
 // This file ports src/account.ts — the bits that decide whether a
@@ -69,7 +76,7 @@ func ShouldProxyNativeCodex(model string, headers http.Header) (NativeCodexRoute
 	if token == "" {
 		return "", false
 	}
-	if IsLocalClientKey(token) {
+	if IsLocalClientKey(token) || strings.HasPrefix(token, "sk-jev-") {
 		return "", false
 	}
 	return RouteOpenAI, true
