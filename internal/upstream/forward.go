@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -311,7 +312,8 @@ func (r *Runner) attempt(ctx context.Context, req AttemptRequest, at *Attempt) {
 	opts := PostOptions{URL: url, Headers: headers, Body: MarshalBody(body), Stream: at.Stream, OnRetry: req.OnRetry}
 	result, err := r.client.Post(ctx, opts)
 	at.Retries = result.Retries
-	if err == nil && result.Response.StatusCode == 401 && provider.Auth == config.AuthOAuth && provider.OAuthSource != config.OAuthStatic {
+	isAuthErr := result.Response.StatusCode == 401 || (result.Response.StatusCode == 403 && strings.Contains(strings.ToLower(result.Text), "unauthenticated"))
+		if err == nil && isAuthErr && provider.Auth == config.AuthOAuth && provider.OAuthSource != config.OAuthStatic {
 		r.deps.Auth.Invalidate(string(provider.OAuthSource), provider.Login)
 		if fresh, refreshErr := r.deps.Auth.ResolveProviderAuth(ctx, provider, oauth.WireKind(at.Plan.Wire), req.ExtraHeaders.Get("x-jevonian-session")); refreshErr == nil {
 			for k, v := range fresh.Headers {

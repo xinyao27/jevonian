@@ -30,11 +30,14 @@ var quotaTokens = map[string]bool{
 }
 
 var billingTokens = map[string]bool{
-	"insufficient_credits": true,
-	"insufficient_balance": true,
-	"payment_required":     true,
-	"billing_not_active":   true,
-	"budget_exhausted":     true,
+	"insufficient_credits":       true,
+	"insufficient_balance":       true,
+	"payment_required":           true,
+	"billing_not_active":         true,
+	"budget_exhausted":           true,
+	"credit_exhausted":           true,
+	"spending_limit_reached":     true,
+	"used_all_available_credits": true,
 }
 
 var nonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
@@ -111,6 +114,8 @@ var freeTextSpend = []struct {
 	{regexp.MustCompile(`(?i)rate limit( has been)? reached|too many requests`), SignalQuota},
 	{regexp.MustCompile(`(?i)insufficient (credits?|balance|funds?|quota)`), SignalBilling},
 	{regexp.MustCompile(`(?i)payment required|billing not active|budget exhausted`), SignalBilling},
+	{regexp.MustCompile(`(?i)(used all available credits|monthly spending limit|purchase more credits|raise your spending limit|spending_limit)`), SignalBilling},
+	{regexp.MustCompile(`(?i)(permission-denied|permission_denied).*?(credits?|spending limit|balance)`), SignalBilling},
 }
 
 // MessageSpendSignal recovers the same verdict from an already-unwrapped error

@@ -432,7 +432,13 @@ func (a *openaiAdapter) Prepare(in PrepInput) (wire.Body, error) {
 	if in.Stream {
 		body["stream"] = true
 	}
-	if in.Effort != "" {
+	delete(body, "reasoningEffort")
+	if in.Model == "grok-build-0.1" || in.Effort == "none" {
+		delete(body, "reasoning_effort")
+		delete(body, "reasoning")
+		delete(body, "thinking")
+		delete(body, "thinking_budget")
+	} else if in.Effort != "" {
 		body = withEffort(body, in.Effort)
 	}
 	body = fitThinkingBudget(body)
@@ -480,6 +486,7 @@ func (a *anthropicAdapter) Prepare(in PrepInput) (wire.Body, error) {
 		if in.Stream {
 			native["stream"] = true
 		}
+		delete(native, "context_management")
 		withEffort := anthropicwire.WithEffort(native, in.Effort, anthropicwire.WireAnthropic, clientEffort)
 		body = anthropicwire.FitThinkingMaxTokens(withEffort, anthropicwire.MaxTokensOptions{
 			ClientSetMax: true,
@@ -619,17 +626,25 @@ func (a *responsesAdapter) Headers(p config.Provider, base http.Header) http.Hea
 // withEffort writes the reasoning effort onto a chat-shaped body, honoring a
 // client's explicit instruction.
 func withEffort(body wire.Body, effort string) wire.Body {
-	if effort == "" {
-		return body
-	}
-	if _, ok := body["reasoning_effort"]; ok {
+	if effort == "" || effort == "none" {
+		delete(body, "reasoning_effort")
+		delete(body, "reasoningEffort")
+		delete(body, "thinking_budget")
 		return body
 	}
 	out := make(wire.Body, len(body)+1)
 	for k, v := range body {
 		out[k] = v
 	}
-	out["reasoning_effort"] = effort
+	delete(out, "thinking_budget")
+	delete(out, "reasoningEffort")
+	if out["model"] == "grok-build-0.1" {
+		delete(out, "reasoning_effort")
+		return out
+	}
+	if _, ok := out["reasoning_effort"]; !ok {
+		out["reasoning_effort"] = effort
+	}
 	return out
 }
 
@@ -637,7 +652,13 @@ func withEffort(body wire.Body, effort string) wire.Body {
 // or max_tokens. On DashScope/Qwen, reasoning models default thinking_budget to 32768,
 // which errors with HTTP 400 "max_completion_tokens [X] must be greater than thinking_budget [32768]"
 // whenever a client restricts max_completion_tokens <= 32768.
+// When reasoning_effort is present, DashScope forbids thinking_budget simultaneously.
 func fitThinkingBudget(body wire.Body) wire.Body {
+	if _, ok := body["reasoning_effort"]; ok {
+		delete(body, "thinking_budget")
+		return body
+	}
+
 	var maxTokens int
 	if v, ok := body["max_completion_tokens"]; ok {
 		maxTokens = bodyToInt(v)

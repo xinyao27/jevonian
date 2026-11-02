@@ -48,7 +48,7 @@ type Outcome struct {
 // Failoverable reports whether routing should walk the next candidate.
 func (o Outcome) Failoverable() bool {
 	switch o.Kind {
-	case OutcomeHostFailure, OutcomeQuotaRefusal, OutcomeRateLimit, OutcomeProviderRefusal:
+	case OutcomeHostFailure, OutcomeQuotaRefusal, OutcomeRateLimit, OutcomeProviderRefusal, OutcomeContextOverflow:
 		return true
 	}
 	return false

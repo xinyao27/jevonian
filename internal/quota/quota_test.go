@@ -40,6 +40,9 @@ func TestMessageSpendSignal(t *testing.T) {
 	if got := MessageSpendSignal("insufficient balance"); got != SignalBilling {
 		t.Fatalf("got %q", got)
 	}
+	if got := MessageSpendSignal("Your team has either used all available credits or reached its monthly spending limit"); got != SignalBilling {
+		t.Fatalf("xAI spending limit must read as billing: %q", got)
+	}
 }
 
 func TestIsProviderRefusal(t *testing.T) {

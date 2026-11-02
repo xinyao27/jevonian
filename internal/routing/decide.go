@@ -509,6 +509,17 @@ func (t *turnCtx) decideExplicit(phase, requestedRaw, requestID, session string,
 			}
 		}
 	}
+	// Prefer candidates whose context window can hold the incoming prompt.
+	conversationTokens := CompactionEstimate(t.input.Body)
+	capable := CapableCandidates(cfg, deps, healthy)
+	usable, _ := PartitionByCapability(capable, conversationTokens, "", true)
+	if len(usable) > 0 {
+		filtered := make([]TierPick, len(usable))
+		for i, c := range usable {
+			filtered[i] = c.TierPick
+		}
+		healthy = filtered
+	}
 	pool := healthy
 	if len(pool) == 0 {
 		pool = tier
