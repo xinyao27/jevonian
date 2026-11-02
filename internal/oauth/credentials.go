@@ -38,6 +38,8 @@ const (
 	claudeRefreshURL      = "https://console.anthropic.com/v1/oauth/token"
 	codexRefreshURL       = "https://auth.openai.com/oauth/token"
 	antigravityRefreshURL = "https://oauth2.googleapis.com/token"
+	grokClientID          = "b1a00492-073a-47ea-816f-4c329264a828"
+	grokRefreshURL        = "https://auth.x.ai/oauth2/token"
 )
 
 // ClaudeCodeSystemPrompt is the identity Claude Code expects for OAuth chats.
@@ -903,4 +905,158 @@ func numberField(value any) int64 {
 		return int64(n)
 	}
 	return 0
+}
+
+// ---------------------------------------------------------------------------
+// Grok (xAI)
+// ---------------------------------------------------------------------------
+
+// GrokAuthPath is where Grok keeps auth.json: JEVONIAN_GROK_AUTH wins, then
+// login.credentialsPath, then $GROK_HOME / login.home / ~/.grok.
+func GrokAuthPath(login *Login) string { return grokAuthPath(login) }
+
+func grokAuthPath(login *Login) string {
+	if v := os.Getenv("JEVONIAN_GROK_AUTH"); v != "" {
+		return v
+	}
+	if login != nil && login.CredentialsPath != "" {
+		return login.CredentialsPath
+	}
+	base := os.Getenv("GROK_HOME")
+	if base == "" && login != nil {
+		base = login.Home
+	}
+	if base == "" {
+		home, _ := os.UserHomeDir()
+		base = filepath.Join(home, ".grok")
+	}
+	return filepath.Join(base, "auth.json")
+}
+
+func readGrokFile(path string) *storedCredential {
+	data, ok := readJSONFile(path)
+	if !ok {
+		return nil
+	}
+	return &storedCredential{
+		data: data,
+		save: func(_ context.Context, next map[string]any) error {
+			return writeJSONFile(path, next, true)
+		},
+		label: path,
+	}
+}
+
+func (r *Resolver) hasGrokCredential(login *Login) bool {
+	return readGrokFile(grokAuthPath(login)) != nil
+}
+
+type refreshedGrok struct {
+	accessToken  string
+	refreshToken string
+	expiresAt    int64
+}
+
+func (r *Resolver) refreshGrok(ctx context.Context, clientID, refreshToken string) (*refreshedGrok, error) {
+	if clientID == "" {
+		clientID = grokClientID
+	}
+	form := url.Values{
+		"grant_type":    {"refresh_token"},
+		"client_id":     {clientID},
+		"refresh_token": {refreshToken},
+	}.Encode()
+	status, data, err := r.postForm(ctx, grokRefreshURL, form)
+	if err != nil || status < 200 || status >= 300 {
+		return nil, errRefreshed
+	}
+	var j map[string]any
+	if err := json.Unmarshal(data, &j); err != nil {
+		return nil, errRefreshed
+	}
+	access := stringField(j["access_token"])
+	if access == "" {
+		return nil, errRefreshed
+	}
+	expiresIn := numberField(j["expires_in"])
+	if expiresIn == 0 {
+		expiresIn = 21600
+	}
+	rt := stringField(j["refresh_token"])
+	if rt == "" {
+		rt = refreshToken
+	}
+	return &refreshedGrok{
+		accessToken:  access,
+		refreshToken: rt,
+		expiresAt:    r.now().UnixMilli() + expiresIn*1000,
+	}, nil
+}
+
+func (r *Resolver) resolveGrok(ctx context.Context, login *Login) (Token, error) {
+	credential := readGrokFile(grokAuthPath(login))
+	if credential == nil {
+		return Token{}, errors.New("Grok credentials not found. Sign in with `grok` first, or set JEVONIAN_GROK_AUTH.")
+	}
+	var targetKey string
+	var entry map[string]any
+	for k, v := range credential.data {
+		if m, ok := v.(map[string]any); ok {
+			if m["key"] != nil || m["refresh_token"] != nil {
+				targetKey = k
+				entry = m
+				break
+			}
+		}
+	}
+	if entry == nil {
+		return Token{}, errors.New("Grok auth.json contains no valid token record.")
+	}
+
+	accessToken := stringField(entry["key"])
+	refreshToken := stringField(entry["refresh_token"])
+	clientID := stringField(entry["oidc_client_id"])
+	if clientID == "" {
+		clientID = grokClientID
+	}
+
+	var expiresAt int64
+	if expStr := stringField(entry["expires_at"]); expStr != "" {
+		if t, err := time.Parse(time.RFC3339Nano, expStr); err == nil {
+			expiresAt = t.UnixMilli()
+		} else if t, err := time.Parse(time.RFC3339, expStr); err == nil {
+			expiresAt = t.UnixMilli()
+		}
+	}
+	if expiresAt == 0 {
+		expiresAt = jwtExpiryMS(accessToken)
+	}
+
+	now := r.now().UnixMilli()
+	if accessToken != "" && (expiresAt == 0 || expiresAt-now > refreshSkewMS) {
+		return Token{Token: accessToken, ExpiresAt: expiresAt}, nil
+	}
+	if refreshToken == "" {
+		return Token{}, errors.New("Grok token is expired and has no refresh token. Run `grok login` to sign in again.")
+	}
+
+	refreshed, err := r.refreshGrok(ctx, clientID, refreshToken)
+	if err != nil {
+		return Token{}, errors.New("Grok OAuth refresh failed. Run `grok login` to sign in again.")
+	}
+
+	next := cloneRecord(credential.data)
+	nextEntry := cloneRecord(entry)
+	nextEntry["key"] = refreshed.accessToken
+	nextEntry["refresh_token"] = refreshed.refreshToken
+	nextEntry["expires_at"] = time.UnixMilli(refreshed.expiresAt).UTC().Format(time.RFC3339Nano)
+	next[targetKey] = nextEntry
+	if credential.save != nil {
+		_ = credential.save(ctx, next)
+	}
+
+	return Token{
+		Token:     refreshed.accessToken,
+		ExpiresAt: refreshed.expiresAt,
+	}, nil
 }

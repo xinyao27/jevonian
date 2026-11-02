@@ -36,6 +36,7 @@ var Sources = []Source{
 	"workbuddy-ai",
 	"freebuff",
 	"static",
+	"grok",
 }
 
 // IsSource reports whether value names a known source.
@@ -276,6 +277,8 @@ func (r *Resolver) resolveSource(ctx context.Context, opts ResolveOptions) (Toke
 		return r.resolveWorkbuddy(ctx, login, opts.Endpoint)
 	case "freebuff":
 		return r.resolveFreebuff(login)
+	case "grok":
+		return r.resolveGrok(ctx, login)
 	default:
 		return Token{}, fmt.Errorf("unknown OAuth source %q", opts.Source)
 	}
@@ -328,6 +331,8 @@ func (r *Resolver) HasCredential(source Source, login *Login) bool {
 		return r.workbuddyHasCredential(login)
 	case "freebuff":
 		return freebuff.HasCredential(login)
+	case "grok":
+		return r.hasGrokCredential(login)
 	case "antigravity":
 		override := loginCredentialsPath(login)
 		if override == "" {
@@ -377,6 +382,8 @@ func CredentialLabel(source Source) string {
 		return "WorkBuddy AI credentials"
 	case "freebuff":
 		return "Freebuff credentials"
+	case "grok":
+		return "Grok credentials"
 	default:
 		return "stored token"
 	}

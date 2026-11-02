@@ -51,6 +51,7 @@ const (
 	OAuthWorkbuddyAI OAuthSource = "workbuddy-ai"
 	OAuthFreebuff    OAuthSource = "freebuff"
 	OAuthStatic      OAuthSource = "static"
+	OAuthGrok        OAuthSource = "grok"
 )
 
 // ModelEntry is a model id with an optional per-model wire pin.
